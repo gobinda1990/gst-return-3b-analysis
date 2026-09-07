@@ -1,5 +1,5 @@
 # ============================================================
-# Stage 1: Build Spring Boot application
+# Stage 1: Build
 # ============================================================
 FROM maven:3.9.6-eclipse-temurin-17 AS builder
 
@@ -17,10 +17,11 @@ RUN mvn clean package -DskipTests
 # ============================================================
 # Stage 2: Runtime
 # ============================================================
-FROM eclipse-temurin:17-jre-alpine
+FROM eclipse-temurin:17-jre
 
-# Required by XGBoost4J native library
-RUN apk add --no-cache libgomp
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
