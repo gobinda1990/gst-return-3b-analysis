@@ -5,10 +5,10 @@ pipeline {
 		SONARQUBE_SERVER = 'sonar' 
         SONAR_HOST_URL = 'http://10.153.43.8:9000'
         SCANNER_HOME = tool 'sonar-scanner' 
-        SONAR_PROJECT_KEY = 'dashboard-service'
-        SONAR_PROJECT_NAME = 'dashboard-service'
-        IMAGE_NAME = "dashboard-service"
-        CONTAINER_NAME = "dashboard-service"
+        SONAR_PROJECT_KEY = 'gst-retun-3b-analysis'
+        SONAR_PROJECT_NAME = 'gst-retun-3b-analysis'
+        IMAGE_NAME = "gst-retun-3b-analysis"
+        CONTAINER_NAME = "gst-retun-3b-analysis"
          
     }
 
