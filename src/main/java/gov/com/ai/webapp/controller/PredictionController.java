@@ -9,7 +9,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
-@RequestMapping("/gst")
+@RequestMapping("/gst/return-3b")
 @CrossOrigin(origins = "*")
 @Slf4j
 @RequiredArgsConstructor
@@ -17,7 +17,7 @@ public class PredictionController {
 
     private final GstPredictionService predictionService;
 
-    @PostMapping("/analytics/return-3b/predict")
+    @PostMapping("/predict")
     public ResponseEntity<PredictionResponse> predictRiskAndForecast(@RequestBody PredictionRequest request) {
         log.info("Received ML inference request for GSTIN: [{}]", request.getGstin());
         

@@ -13,7 +13,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
 @RestController
-@RequestMapping("/gst")
+@RequestMapping("/gst/return-3b")
 @CrossOrigin(origins = "*")
 @Slf4j
 @RequiredArgsConstructor
@@ -21,7 +21,7 @@ public class Return3bAnalysisController {
 	
 	private final Return3bAnalysisService return3bAnalysisService;
 	
-	@GetMapping("/analytics/return-3b/{gstin}")
+	@GetMapping("/analytics/{gstin}")
 	public ResponseEntity<GstinAnalysisResponse> getGstinAnalysis(
 			@PathVariable @Pattern(regexp = "^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$", message = "Invalid GSTIN format provided") String gstin) {
 

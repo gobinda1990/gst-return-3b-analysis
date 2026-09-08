@@ -69,7 +69,7 @@ pipeline {
         stage('Run New Container') {
             steps {
                 script {
-                    sh 'docker run -d -p 8085:8085 --name ${CONTAINER_NAME} ${IMAGE_NAME}:latest'
+                    sh 'docker run -d -p 8085:8086 --name ${CONTAINER_NAME} ${IMAGE_NAME}:latest'
                 }
             }
         }
