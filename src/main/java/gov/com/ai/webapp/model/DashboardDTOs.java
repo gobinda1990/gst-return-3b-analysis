@@ -41,6 +41,7 @@ public class DashboardDTOs {
 	    private BigDecimal lifetimeTaxableValue;
 	    private BigDecimal lifetimeCashPaid;
 	    private BigDecimal lifetimeItcUtilized;
+	    private BigDecimal lifetimeItcEligible;
 	    private Double currentRiskScore;
 	    private String riskCategory;
 
@@ -65,6 +66,7 @@ public class DashboardDTOs {
 	    private BigDecimal cess;
 	    private BigDecimal outputTax;
 	    private BigDecimal itcClaimed;
+	    private BigDecimal itcElligible;
 	    private BigDecimal cashPaid;
 	    private BigDecimal rcmTax;
 	    private Double itcRatio;

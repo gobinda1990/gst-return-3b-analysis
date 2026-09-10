@@ -28,7 +28,7 @@ public class Return3bAnalysisController {
 		log.info("Fetching 6-month GSTR-3B analytics breakdown for GSTIN: {}", gstin);
 
 		GstinAnalysisResponse response = return3bAnalysisService.getGstinAnalysis(gstin.toUpperCase());
-		log.info("Tax val:--{}",response.getLast6MonthsHistory());
+		log.info("Tax val:--{}",response.getLifetimeItcEligible());
 		return ResponseEntity.ok(response);
 	}
 

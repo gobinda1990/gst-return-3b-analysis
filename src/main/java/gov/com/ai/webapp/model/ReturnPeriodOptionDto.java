@@ -12,6 +12,6 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 @AllArgsConstructor
 public class ReturnPeriodOptionDto {
-    private String label; // e.g., "June 2026"
-    private String value; // e.g., "062026"
+    private String label; 
+    private String value; 
 }

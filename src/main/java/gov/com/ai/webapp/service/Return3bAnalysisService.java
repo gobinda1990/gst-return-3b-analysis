@@ -25,14 +25,9 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 @Service
 @RequiredArgsConstructor
-public class Return3bAnalysisService {
+public class Return3bAnalysisService {	
 
-	/*
-	 * ============================================================ CONSTANTS
-	 * ============================================================
-	 */
-
-	private static final int HISTORICAL_MONTHS_LOOKBACK = 12;
+	private static final int HISTORICAL_MONTHS_LOOKBACK = 24;
 	private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("dd-MM-yyyy");
 	private static final Pattern GSTIN_PATTERN = Pattern.compile("^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$");
 	private static final BigDecimal ZERO = BigDecimal.ZERO;
@@ -87,6 +82,7 @@ public class Return3bAnalysisService {
 		BigDecimal lifetimeOutputTax = ZERO;
 		BigDecimal lifetimeRcm = ZERO;
 		BigDecimal totalExcessItc = ZERO;
+		BigDecimal totalEligibleItc = ZERO;
 
 		List<Gstr3bMonthlyReturnDTO> historyList = new ArrayList<>();
 		List<ComplianceAlertDTO> alerts = new ArrayList<>();
@@ -117,7 +113,8 @@ public class Return3bAnalysisService {
 			BigDecimal cashPaid = safe(bean.getCashTaxPaid());
 			BigDecimal rcmTax = safe(bean.getRcmTotalTax());
 			BigDecimal excessItc = safe(bean.getExcessItc());
-
+			BigDecimal eligibleItc=safe(bean.getEligibleItc());
+            log.info("ITC:"+safe(bean.getEligibleItc()));
 			// Accumulate Lifetime Metrics
 			lifetimeTaxable = lifetimeTaxable.add(taxableValue);
 			lifetimeCash = lifetimeCash.add(cashPaid);
@@ -129,7 +126,8 @@ public class Return3bAnalysisService {
 			lifetimeOutputTax = lifetimeOutputTax.add(outputTax);
 			lifetimeRcm = lifetimeRcm.add(rcmTax);
 			totalExcessItc = totalExcessItc.add(excessItc);
-
+			totalEligibleItc=totalEligibleItc.add(eligibleItc);
+			log.info("ITC EL:"+totalEligibleItc);
 			// Compute Financial Ratios
 			double itcRatio = calculateRatio(bean.getItcUtilizationRatio(), outputTax, itcClaimed);
 			double cashRatio = calculateRatio(bean.getCashPaymentRatio(), outputTax, cashPaid);
@@ -153,7 +151,9 @@ public class Return3bAnalysisService {
 			// Build Monthly DTO
 			Gstr3bMonthlyReturnDTO monthlyDto = Gstr3bMonthlyReturnDTO.builder().retPeriod(bean.getRetPeriod())
 					.formattedPeriod(formatPeriodCode(bean.getRetPeriod())).taxableValue(taxableValue).igst(igst)
-					.cgst(cgst).sgst(sgst).cess(cess).outputTax(outputTax).itcClaimed(itcClaimed).cashPaid(cashPaid)
+					.cgst(cgst).sgst(sgst).cess(cess).outputTax(outputTax).itcClaimed(itcClaimed)
+					.itcElligible(eligibleItc)
+					.cashPaid(cashPaid)
 					.rcmTax(rcmTax).itcRatio(roundRatio(itcRatio)).cashRatio(roundRatio(cashRatio))
 					.filingDelayDays(filingDelayDays).filingStatus(filingStatus).build();
 
@@ -176,7 +176,9 @@ public class Return3bAnalysisService {
 		// 7. Construct Final Response Payload
 		GstinAnalysisResponse response = GstinAnalysisResponse.builder().gstin(normalizedGstin).legalName(legalName)
 				.tradeName(tradeName).jurisdiction(jurisdiction).taxpayerType("REGULAR").status(status)
-				.lifetimeTaxableValue(scale2(lifetimeTaxable)).lifetimeCashPaid(scale2(lifetimeCash))
+				.lifetimeTaxableValue(scale2(lifetimeTaxable))
+				.lifetimeItcEligible(scale2(totalEligibleItc))
+				.lifetimeCashPaid(scale2(lifetimeCash))
 				.lifetimeItcUtilized(scale2(lifetimeItc)).currentRiskScore(roundRatio(currentRiskScore))
 				.riskCategory(overallRiskCategory).last6MonthsHistory(historyList).activeAlerts(alerts).build();
 
