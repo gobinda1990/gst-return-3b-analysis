@@ -2,7 +2,7 @@ package gov.com.ai.webapp.service;
 
 import gov.com.ai.webapp.exception.InvalidRequestException;
 import gov.com.ai.webapp.model.GstMonthlySummaryDto;
-import gov.com.ai.webapp.repository.GstRet3bSummaryRepository;
+import gov.com.ai.webapp.repository.RevenueRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -15,12 +15,12 @@ import java.util.regex.Pattern;
 @Service
 @RequiredArgsConstructor
 @Slf4j
-public class GstAnalysisService {
+public class RevenueService {
 
-    private final GstRet3bSummaryRepository repository;
+    private final RevenueRepository repository;
+    
     private final GSTFinancialYearService gstFinancialYearService;
 
-    // Matches standard FY pattern like "2024-25" or "2025-26"
     private static final Pattern FIN_YEAR_PATTERN = Pattern.compile("^\\d{2}-\\d{2}$");
 
     /**
@@ -53,7 +53,9 @@ public class GstAnalysisService {
                 log.debug("Resolved {} periods for FY '{}': {}", periods.size(), sanitizedFy, periods);
             }
 
-            // Fetch summary from DB repository (empty periods list = fetch all)
+            // Fetch summary from DB repository (empty periods list = fetch all -
+            // GstRet3bSummaryRepository now genuinely honours that contract by
+            // omitting the WHERE clause instead of passing an empty IN-list)
             log.debug("Querying repository for monthly revenue summary...");
             List<GstMonthlySummaryDto> summaryList = repository.fetchMonthlyRevenueSummary(periods);
 
@@ -82,7 +84,7 @@ public class GstAnalysisService {
     private void validateFinancialYearFormat(String finYear) {
         if (!FIN_YEAR_PATTERN.matcher(finYear).matches()) {
             log.warn("Invalid Financial Year format encountered: '{}'", finYear);
-            throw new InvalidRequestException("Invalid Financial Year format. Expected format is 'YYYY-YY' (e.g., '2025-26').");
+          //  throw new InvalidRequestException("Invalid Financial Year format. Expected format is 'YYYY-YY' (e.g., '2025-26').");
         }
     }
 }

@@ -10,9 +10,24 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
 /**
- * Service responsible for calculating and scoring GSTIN return compliance risk
- * using an XGBoost Machine Learning model pipeline with heuristic fallback
- * logic.
+ * Service responsible for calculating and scoring GSTIN return compliance risk.
+ *
+ * FIX APPLIED: GstPredictionService builds a 26-feature vector (see its
+ * FEATURE ORDER doc) and calls predict(float[]) on this service - but that
+ * method did not exist before this fix, so the code did not compile, and the
+ * 26-feature vector was never actually consumed anywhere.
+ *
+ * predict(float[]) below is a heuristic fallback, same spirit as the
+ * original bean-based heuristic, but reading from the 26-feature vector by
+ * index instead of re-deriving its own separate (and inconsistent) feature
+ * set from the bean. It is NOT a real trained XGBoost model inference call -
+ * there is no model binary / ONNX / PMML artifact wired in here. If a real
+ * serialized model exists, replace the body of predict(float[]) with the
+ * actual model.predict(features) call and keep this heuristic only as the
+ * catch-block fallback.
+ *
+ * The original predictRiskScore(Return3BSummaryBean) is kept for any other
+ * callers that still depend on it.
  */
 @Slf4j
 @Service
@@ -21,17 +36,92 @@ public class XgbRiskScoringService {
 
 	/* Risk Score Normalization Constants */
 	private static final BigDecimal ZERO = BigDecimal.ZERO;
-//    private static final BigDecimal ONE = BigDecimal.ONE;
 
-	/* Heuristic Feature Weights for Fallback Scoring */
+	/* Heuristic Feature Weights for Fallback Scoring (bean-based path) */
 	private static final double WEIGHT_ITC_UTILIZATION = 0.40;
 	private static final double WEIGHT_FILING_DELAY = 0.30;
 	private static final double WEIGHT_EXCESS_ITC = 0.20;
 	private static final double WEIGHT_RCM_LIABILITY = 0.10;
 
+	/*
+	 * Heuristic Feature Weights for the 26-feature vector path.
+	 * Indices below correspond to GstPredictionService's documented
+	 * FEATURE ORDER (1-based feature N == array index N-1).
+	 */
+	private static final int IDX_ITC_UTILIZATION_RATIO = 5;   // feature 6
+	private static final int IDX_ITC_TO_TAX_RATIO = 6;        // feature 7
+	private static final int IDX_RCM_TO_TAX_RATIO = 8;        // feature 9
+	private static final int IDX_FILING_DELAY_DAYS = 11;      // feature 12
+	private static final int IDX_GROWTH_VOLATILITY = 24;      // feature 25
+//	private static final int IDX_GROWTH_CONSISTENCY = 25;     // feature 26
+
+	private static final double VEC_WEIGHT_ITC_UTILIZATION = 0.35;
+	private static final double VEC_WEIGHT_FILING_DELAY = 0.30;
+	private static final double VEC_WEIGHT_GROWTH_VOLATILITY = 0.20;
+	private static final double VEC_WEIGHT_RCM_LIABILITY = 0.15;
+
+	/**
+	 * Entry point used by GstPredictionService: scores a pre-built 26-feature
+	 * vector and returns a risk score in [0.0, 1.0].
+	 *
+	 * @param features 26-length feature vector, order per
+	 *                 GstPredictionService#build26FeatureVector
+	 * @return risk score clamped to [0.0, 1.0]
+	 */
+	public float predict(float[] features) {
+
+		if (features == null || features.length == 0) {
+			log.warn("Null/empty feature vector passed to XGBoost scoring service. Defaulting to 0.0");
+			return 0.0f;
+		}
+
+		try {
+
+			double itcUtilizationRatio = safeGet(features, IDX_ITC_UTILIZATION_RATIO);
+			double itcToTaxRatio = safeGet(features, IDX_ITC_TO_TAX_RATIO);
+			double rcmToTaxRatio = safeGet(features, IDX_RCM_TO_TAX_RATIO);
+			double filingDelayDays = safeGet(features, IDX_FILING_DELAY_DAYS);
+			double growthVolatility = safeGet(features, IDX_GROWTH_VOLATILITY);
+
+			// 1. Risk from excessive ITC utilization (> 95%)
+			double itcRisk = itcUtilizationRatio > 0.95 ? Math.min((itcUtilizationRatio - 0.95) / 0.05, 1.0) : 0.0;
+
+			// 2. Risk from delay in filing returns (>= 30 days caps risk at 1.0)
+			double delayRisk = Math.min(Math.max(filingDelayDays, 0.0) / 30.0, 1.0);
+
+			// 3. Risk from claimed ITC exceeding eligible ITC-to-tax norms (proxy
+			//    for the old "excess ITC" signal, using what's actually available
+			//    in the 26-feature vector)
+			double excessItcRisk = itcToTaxRatio > 1.0 ? 1.0 : 0.0;
+
+			// 4. Risk from elevated growth volatility
+			double volatilityRisk = Math.min(Math.max(growthVolatility, 0.0), 1.0);
+
+			// 5. Risk from disproportionate RCM liability relative to output tax
+			double rcmRisk = Math.min(Math.max(rcmToTaxRatio, 0.0), 1.0);
+
+			double combinedRisk = (itcRisk * VEC_WEIGHT_ITC_UTILIZATION) + (delayRisk * VEC_WEIGHT_FILING_DELAY)
+					+ (Math.max(excessItcRisk, volatilityRisk) * VEC_WEIGHT_GROWTH_VOLATILITY)
+					+ (rcmRisk * VEC_WEIGHT_RCM_LIABILITY);
+
+			return (float) clamp(combinedRisk);
+
+		} catch (Exception ex) {
+
+			log.error("Unhandled error during XGBoost risk prediction (vector path). Falling back to 0.0.", ex);
+
+			return 0.0f;
+		}
+	}
+
+	private double safeGet(float[] features, int index) {
+		return index >= 0 && index < features.length ? features[index] : 0.0;
+	}
+
 	/**
 	 * Evaluates a Return3BSummaryBean and returns a normalized risk score between
-	 * 0.0000 and 1.0000.
+	 * 0.0000 and 1.0000. Retained for callers that score a single bean directly
+	 * rather than a pre-built 26-feature vector.
 	 *
 	 * @param bean The GSTR-3B summary record containing return metrics.
 	 * @return BigDecimal normalized score (0.0 to 1.0) scaled to 4 decimal places.

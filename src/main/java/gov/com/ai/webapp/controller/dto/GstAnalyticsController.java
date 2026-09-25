@@ -17,7 +17,7 @@ import lombok.extern.slf4j.Slf4j;
 @RequestMapping("/gst/analytics")
 @RequiredArgsConstructor
 @Validated
-@CrossOrigin(origins = "*")
+@CrossOrigin(origins = "http://localhost:5173")
 public class GstAnalyticsController {
 
 	private final GstAnalyticsService analyticsService;

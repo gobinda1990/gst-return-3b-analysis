@@ -25,10 +25,10 @@ public class Return3bAnalysisController {
 	public ResponseEntity<GstinAnalysisResponse> getGstinAnalysis(
 			@PathVariable @Pattern(regexp = "^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$", message = "Invalid GSTIN format provided") String gstin) {
 
-		log.info("Fetching 6-month GSTR-3B analytics breakdown for GSTIN: {}", gstin);
+		log.info("Fetching 24-month GSTR-3B analytics breakdown for GSTIN: {}", gstin);
 
 		GstinAnalysisResponse response = return3bAnalysisService.getGstinAnalysis(gstin.toUpperCase());
-		log.info("Tax val:--{}",response.getLifetimeItcEligible());
+		log.info("Fetching completed....");
 		return ResponseEntity.ok(response);
 	}
 

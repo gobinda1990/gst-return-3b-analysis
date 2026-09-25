@@ -36,11 +36,7 @@ public record GstItcRiskRow(
         BigDecimal itcToTaxPercent,
 
         BigDecimal rcmTotalTax,
-
-        /*
-         * Calculated from ITC_ISRC_*.
-         * This is NOT an Oracle column.
-         */
+       
         BigDecimal rcmTotalItc,
 
         BigDecimal xgbRiskScore,

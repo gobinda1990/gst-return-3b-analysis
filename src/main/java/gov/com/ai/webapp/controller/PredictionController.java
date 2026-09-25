@@ -22,6 +22,7 @@ public class PredictionController {
         log.info("Received ML inference request for GSTIN: [{}]", request.getGstin());
         
         PredictionResponse response = predictionService.predictNextMonth(request);
+        log.info("predic:--"+response);
         return ResponseEntity.ok(response);
     }
 }

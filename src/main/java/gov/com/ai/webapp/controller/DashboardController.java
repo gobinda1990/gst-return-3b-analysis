@@ -23,7 +23,7 @@ import lombok.extern.slf4j.Slf4j;
 @RequestMapping("/gst/return-3b")
 @RequiredArgsConstructor
 @Validated
-@CrossOrigin(origins = "*")
+@CrossOrigin(origins = "http://localhost:5173")
 public class DashboardController {
 
 	private final DashboardService dashboardService;

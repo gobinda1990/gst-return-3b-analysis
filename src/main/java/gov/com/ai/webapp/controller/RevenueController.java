@@ -2,7 +2,7 @@ package gov.com.ai.webapp.controller;
 
 import gov.com.ai.webapp.model.GstMonthlySummaryDto;
 import gov.com.ai.webapp.service.GSTFinancialYearService;
-import gov.com.ai.webapp.service.GstAnalysisService;
+import gov.com.ai.webapp.service.RevenueService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
@@ -12,11 +12,11 @@ import java.util.List;
 @Slf4j
 @RestController
 @RequestMapping("/gst/return-3b")
-@CrossOrigin(origins = "*") 
+@CrossOrigin(origins = "http://localhost:5173") 
 @RequiredArgsConstructor
-public class GstAnalysisController {
+public class RevenueController {
 
-    private final GstAnalysisService gstAnalysisService;
+    private final RevenueService gstAnalysisService;
     
     private final GSTFinancialYearService gstFinancialYearService;
 

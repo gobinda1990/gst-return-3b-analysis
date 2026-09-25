@@ -2,17 +2,16 @@ package gov.com.ai.webapp.service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.time.LocalDate;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
-import java.util.UUID;
 import java.util.regex.Pattern;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import gov.com.ai.webapp.exception.GstAnalyticsException;
 import gov.com.ai.webapp.model.DashboardDTOs.ComplianceAlertDTO;
 import gov.com.ai.webapp.model.DashboardDTOs.GstinAnalysisResponse;
 import gov.com.ai.webapp.model.DashboardDTOs.Gstr3bMonthlyReturnDTO;
@@ -22,56 +21,454 @@ import gov.com.ai.webapp.repository.Return3bRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
+/**
+ * Return 3B Analysis Service - Aggregates GSTR-3B historical data and evaluates
+ * compliance alerts.
+ * 
+ * Integration Points: - Fetches historical returns from Return3bRepository -
+ * Calls GstReturn3bRiskAssessmentService to detect risks and generate alerts -
+ * Aggregates metrics across multiple periods - Builds comprehensive GSTIN
+ * analysis response
+ * 
+ * Alert Generation: - Only risk-based alerts from
+ * GstReturn3bRiskAssessmentService - Alert de-duplication via Set<String>
+ * alertKeys - Per-period error handling (skip failing periods, continue
+ * processing)
+ */
 @Slf4j
 @Service
 @RequiredArgsConstructor
-public class Return3bAnalysisService {	
+public class Return3bAnalysisService {
 
-	private static final int HISTORICAL_MONTHS_LOOKBACK = 24;
-	private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("dd-MM-yyyy");
+	/* ========== CONFIGURABLE THRESHOLDS ========== */
+	@Value("${gstin.analysis.lookback-months:24}")
+	private int historicalMonthsLookback;
+
+	@Value("${gstin.analysis.risk.high-threshold:0.75}")
+	private double riskHighThreshold;
+
+	@Value("${gstin.analysis.risk.medium-threshold:0.40}")
+	private double riskMediumThreshold;
+
+	/* ========== CONSTANTS ========== */
 	private static final Pattern GSTIN_PATTERN = Pattern.compile("^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$");
 	private static final BigDecimal ZERO = BigDecimal.ZERO;
-
-	/* Risk Thresholds */
-	private static final double RISK_HIGH = 0.75;
-	private static final double RISK_MEDIUM = 0.40;
-
-	/* Compliance Thresholds */
-	private static final double ITC_CRITICAL_THRESHOLD = 0.98;
-	private static final double CASH_HIGH_THRESHOLD = 0.80;
-	private static final int FILING_DELAY_HIGH_DAYS = 30;
+	private static final String GSTIN_NOT_FOUND = "GSTIN profile not found in master record";
 
 	private final Return3bRepository return3bRepository;
+	private final GstReturn3bRiskAssessmentService riskAssessmentService;
 	private final XgbRiskScoringService xgbService;
 
-	/*
-	 * ============================================================ MAIN SERVICE
-	 * METHOD ============================================================
-	 */
-
+	// ============== MAIN SERVICE
 	@Transactional(readOnly = true)
 	public GstinAnalysisResponse getGstinAnalysis(String gstin) {
-
 		String normalizedGstin = normalizeGstin(gstin);
 		validateGstin(normalizedGstin);
 
-		log.info("Generating GSTIN analysis. gstin={}, lookbackMonths={}", normalizedGstin, HISTORICAL_MONTHS_LOOKBACK);
+		log.info("Starting GSTIN analysis. gstin={}, lookbackMonths={}", normalizedGstin, historicalMonthsLookback);
 
-		// 1. Fetch Taxpayer Profile
-		Optional<DealerMaster> profile = return3bRepository.findByGstin(normalizedGstin);
-		if (profile.isEmpty()) {
-			log.warn("GSTIN profile not found in master record. gstin={}", normalizedGstin);
+		try {
+			// 1. Fetch Taxpayer Profile
+			DealerMaster profile = return3bRepository.findByGstin(normalizedGstin).orElse(null);
+
+			if (profile == null) {
+				log.warn("{} for gstin={}", GSTIN_NOT_FOUND, normalizedGstin);
+			}
+
+			// 2. Fetch Historical Returns (with null safety)
+			List<Return3BSummaryBean> historyBeans = Optional
+					.ofNullable(return3bRepository.findHistory(normalizedGstin, historicalMonthsLookback))
+					.orElse(new ArrayList<>());
+
+			if (historyBeans.isEmpty()) {
+				log.warn("No historical returns found for gstin={}", normalizedGstin);
+			}
+
+			// 3. Aggregate Metrics
+			AggregatedMetrics metrics = aggregateMetrics(historyBeans, normalizedGstin);
+
+			// 4. Evaluate Compliance Alerts (risk-based only)
+			List<ComplianceAlertDTO> alerts = evaluateAllAlerts(historyBeans);
+
+			// 5. Build Response
+			return buildAnalysisResponse(normalizedGstin, profile, metrics, alerts);
+
+		} catch (GstAnalyticsException ex) {
+			log.error("GSTIN analysis failed with validation error. gstin={}", normalizedGstin, ex);
+			throw ex;
+		} catch (Exception ex) {
+			log.error("Unexpected error during GSTIN analysis. gstin={}", normalizedGstin, ex);
+			throw new GstAnalyticsException("Failed to analyze GSTIN: " + normalizedGstin);
+		}
+	}
+
+	/*
+	 * ============================================================ AGGREGATION
+	 * LOGIC ============================================================
+	 */
+
+	/**
+	 * Aggregate metrics across all historical returns
+	 */
+	private AggregatedMetrics aggregateMetrics(List<Return3BSummaryBean> historyBeans, String gstin) {
+		AggregatedMetrics metrics = new AggregatedMetrics();
+		List<Gstr3bMonthlyReturnDTO> monthlyHistory = new ArrayList<>();
+
+		double highestRiskScore = 0.0;
+		double latestRiskScore = 0.0;
+		boolean latestRiskCaptured = false;
+
+		for (Return3BSummaryBean bean : historyBeans) {
+			// Skip null beans
+			if (bean == null) {
+				log.warn("Null bean encountered in history list. Skipping.");
+				continue;
+			}
+
+			// Ensure GSTIN is set
+			if (bean.getGstin() == null) {
+				bean.setGstin(gstin);
+			}
+
+			try {
+				// Extract and validate fields with safe() wrapper
+				BigDecimal taxableValue = safe(bean.getTaxableValue());
+				BigDecimal igst = safe(bean.getOutputIgst());
+				BigDecimal cgst = safe(bean.getOutputCgst());
+				BigDecimal sgst = safe(bean.getOutputSgst());
+				BigDecimal cess = safe(bean.getOutputCess());
+				BigDecimal outputTax = safe(bean.getTotalOutputTax());
+				BigDecimal itcClaimed = safe(bean.getUtilizedItc());
+				BigDecimal cashPaid = safe(bean.getCashTaxPaid());
+				BigDecimal rcmTax = safe(bean.getRcmTotalTax());
+				BigDecimal excessItc = safe(bean.getExcessItc());
+				BigDecimal eligibleItc = safe(bean.getEligibleItc());
+
+				// Accumulate Lifetime Metrics
+				metrics.lifetimeTaxable = metrics.lifetimeTaxable.add(taxableValue);
+				metrics.lifetimeCash = metrics.lifetimeCash.add(cashPaid);
+				metrics.lifetimeItc = metrics.lifetimeItc.add(itcClaimed);
+				metrics.lifetimeIgst = metrics.lifetimeIgst.add(igst);
+				metrics.lifetimeCgst = metrics.lifetimeCgst.add(cgst);
+				metrics.lifetimeSgst = metrics.lifetimeSgst.add(sgst);
+				metrics.lifetimeCess = metrics.lifetimeCess.add(cess);
+				metrics.lifetimeOutputTax = metrics.lifetimeOutputTax.add(outputTax);
+				metrics.lifetimeRcm = metrics.lifetimeRcm.add(rcmTax);
+				metrics.totalExcessItc = metrics.totalExcessItc.add(excessItc);
+				metrics.totalEligibleItc = metrics.totalEligibleItc.add(eligibleItc);
+
+				// Compute Financial Ratios
+				double itcRatio = calculateRatio(bean.getItcUtilizationRatio(), outputTax, itcClaimed);
+				double cashRatio = calculateRatio(bean.getCashPaymentRatio(), outputTax, cashPaid);
+
+				int filingDelayDays = bean.getFilingDelayDays() != null ? Math.max(bean.getFilingDelayDays(), 0) : 0;
+				String filingStatus = determineFilingStatus(bean, filingDelayDays);
+
+				// Evaluate Risk Score
+				double scoreVal = fetchRiskScore(bean);
+				scoreVal = normalizeRiskScore(scoreVal);
+
+				if (scoreVal > highestRiskScore) {
+					highestRiskScore = scoreVal;
+				}
+
+				if (!latestRiskCaptured) {
+					latestRiskScore = scoreVal;
+					latestRiskCaptured = true;
+				}
+
+				// Build Monthly DTO
+				Gstr3bMonthlyReturnDTO monthlyDto = Gstr3bMonthlyReturnDTO.builder().retPeriod(bean.getRetPeriod())
+						.formattedPeriod(formatPeriodCode(bean.getRetPeriod())).taxableValue(taxableValue).igst(igst)
+						.cgst(cgst).sgst(sgst).cess(cess).outputTax(outputTax).itcClaimed(itcClaimed)
+						.itcEligible(eligibleItc).cashPaid(cashPaid).rcmTax(rcmTax).itcRatio(roundRatio(itcRatio))
+						.cashRatio(roundRatio(cashRatio)).filingDelayDays(filingDelayDays).filingStatus(filingStatus)
+						.build();
+
+				monthlyHistory.add(monthlyDto);
+
+			} catch (Exception ex) {
+				// Per-period error handling - log and continue
+				log.warn("Failed to process monthly bean for period={}. Skipping this period.", bean.getRetPeriod(),
+						ex);
+				continue;
+			}
 		}
 
-		// 2. Fetch Historical Returns
-		List<Return3BSummaryBean> historyBeans = return3bRepository.findHistory(normalizedGstin,
-				HISTORICAL_MONTHS_LOOKBACK);
+		metrics.historyList = monthlyHistory;
+		metrics.currentRiskScore = latestRiskCaptured ? latestRiskScore : highestRiskScore;
+		metrics.riskCategory = categorizeRiskScore(metrics.currentRiskScore);
 
-		if (historyBeans == null) {
-			historyBeans = new ArrayList<>();
+		log.info("Metrics aggregation completed. gstin={}, monthsProcessed={}, finalRiskScore={}, riskCategory={}",
+				gstin, monthlyHistory.size(), metrics.currentRiskScore, metrics.riskCategory);
+
+		return metrics;
+	}
+
+	/*
+	 * ============================================================ ALERT EVALUATION
+	 * (RISK-BASED ONLY - NO LEGACY ALERTS)
+	 * ============================================================
+	 */
+
+	/**
+	 * Evaluate alerts from GstReturn3bRiskAssessmentService only
+	 * 
+	 * De-duplicates alerts using finding code + period as key
+	 */
+	private List<ComplianceAlertDTO> evaluateAllAlerts(List<Return3BSummaryBean> historyBeans) {
+		List<ComplianceAlertDTO> alerts = new ArrayList<>();
+		Set<String> alertKeys = new HashSet<>();
+
+		for (Return3BSummaryBean bean : historyBeans) {
+			// Skip null beans
+			if (bean == null) {
+				continue;
+			}
+
+			try {
+				// Call risk assessment service to get findings-based alerts
+				GstReturn3bRiskAssessmentService.RiskAssessmentResult riskResult = riskAssessmentService.assess(bean);
+
+				if (riskResult != null && riskResult.getAlerts() != null) {
+					for (ComplianceAlertDTO riskAlert : riskResult.getAlerts()) {
+						// De-duplicate: use finding code + period as key
+						String alertKey = riskAlert.getFindingCode() + "-" + bean.getRetPeriod();
+
+						if (alertKeys.add(alertKey)) {
+							alerts.add(riskAlert);
+							log.debug("Added risk-based alert. code={}, period={}, severity={}",
+									riskAlert.getFindingCode(), bean.getRetPeriod(), riskAlert.getSeverity());
+						} else {
+							log.debug("Duplicate alert skipped. key={}", alertKey);
+						}
+					}
+				}
+
+			} catch (Exception ex) {
+				log.warn("Failed to evaluate alerts for period={}. Skipping this period.", bean.getRetPeriod(), ex);
+				continue;
+			}
 		}
 
-		// 3. Metric Aggregators
+		log.info("Alert evaluation completed. totalAlerts={}", alerts.size());
+		return alerts;
+	}
+
+	// ============RESPONSE BUILDING ==============
+
+	private GstinAnalysisResponse buildAnalysisResponse(String gstin, DealerMaster profile, AggregatedMetrics metrics,
+			List<ComplianceAlertDTO> alerts) {
+
+		String legalName = Optional.ofNullable(profile).map(DealerMaster::getLegalName).filter(this::hasText)
+				.orElse("N/A");
+
+		String tradeName = Optional.ofNullable(profile).map(DealerMaster::getTradeName).filter(this::hasText)
+				.orElse("N/A");
+
+		String pan = Optional.ofNullable(profile).map(DealerMaster::getPanNo).filter(this::hasText).orElse("N/A");
+
+		String jurisdiction = Optional.ofNullable(profile).map(DealerMaster::getStJuri).filter(this::hasText)
+				.orElse("N/A");
+
+		String status = Optional.ofNullable(profile).map(DealerMaster::getAuthStatus).filter(this::hasText)
+				.orElse("ACTIVE");
+
+		return GstinAnalysisResponse.builder().gstin(gstin).legalName(legalName).tradeName(tradeName).pan(pan)
+				.jurisdiction(jurisdiction).taxpayerType("REGULAR").status(status)
+				.lifetaxableValue(scale2(metrics.lifetimeTaxable)).lifetimeIgst(scale2(metrics.lifetimeIgst))
+				.lifetimeCgst(scale2(metrics.lifetimeCgst)).lifetimeSgst(scale2(metrics.lifetimeSgst))
+				.lifetimeCess(scale2(metrics.lifetimeCess)).lifetimeOutputTax(scale2(metrics.lifetimeOutputTax))
+				.lifetimeRcmTax(scale2(metrics.lifetimeRcm)).lifetimeExcessItc(scale2(metrics.totalExcessItc))
+				.lifetimeTaxableValue(scale2(metrics.lifetimeTaxable)).lifetimeCashPaid(scale2(metrics.lifetimeCash))
+				.lifetimeItcUtilized(scale2(metrics.lifetimeItc)).lifetimeItcEligible(scale2(metrics.totalEligibleItc))
+				.currentRiskScore(roundRatio(metrics.currentRiskScore)).riskCategory(metrics.riskCategory)
+				.last6MonthsHistory(metrics.historyList).activeAlerts(alerts).build();
+	}
+
+	// =========== UTILITY METHODS
+
+	/**
+	 * Fetch risk score from XGB service or fallback to database
+	 */
+	private double fetchRiskScore(Return3BSummaryBean bean) {
+		if (xgbService == null) {
+			BigDecimal dbScore = bean.getXgbRiskScore();
+			return dbScore != null ? dbScore.doubleValue() : 0.0;
+		}
+
+		try {
+			BigDecimal predictedScore = xgbService.predictRiskScore(bean);
+			if (predictedScore != null) {
+				return normalizeRiskScore(predictedScore.doubleValue());
+			}
+		} catch (Exception ex) {
+			log.debug("XGBoost scoring failed for period={}. Falling back to database metric.", bean.getRetPeriod(),
+					ex);
+		}
+
+		// Fallback to database score
+		BigDecimal databaseScore = bean.getXgbRiskScore();
+		return databaseScore != null ? normalizeRiskScore(databaseScore.doubleValue()) : 0.0;
+	}
+
+	/**
+	 * Normalize risk score to 0.0 - 1.0 range
+	 */
+	private double normalizeRiskScore(double score) {
+		if (Double.isNaN(score) || Double.isInfinite(score) || score < 0) {
+			log.warn("Invalid risk score detected: {}. Resetting to 0.0", score);
+			return 0.0;
+		}
+
+		// Convert percentage to decimal if needed (e.g., 85.5 -> 0.855)
+		if (score > 1.0 && score <= 100.0) {
+			score = score / 100.0;
+		}
+
+		// Clamp to [0.0, 1.0]
+		return Math.min(Math.max(score, 0.0), 1.0);
+	}
+
+	/**
+	 * Determine filing status based on date and delay
+	 */
+	private String determineFilingStatus(Return3BSummaryBean bean, int filingDelayDays) {
+		if (bean.getFilingDate() == null) {
+			return "PENDING";
+		}
+		return filingDelayDays > 0 ? "DELAYED" : "FILED";
+	}
+
+	/**
+	 * Categorize risk score into HIGH/MEDIUM/LOW
+	 */
+	private String categorizeRiskScore(double score) {
+		if (score >= riskHighThreshold) {
+			return "HIGH";
+		}
+		if (score >= riskMediumThreshold) {
+			return "MEDIUM";
+		}
+		return "LOW";
+	}
+
+	/**
+	 * Format period code from MMYYYY to MM/YYYY
+	 */
+	private String formatPeriodCode(String retPeriod) {
+		if (retPeriod == null || retPeriod.length() != 6) {
+			return retPeriod;
+		}
+
+		try {
+			int month = Integer.parseInt(retPeriod.substring(0, 2));
+			String year = retPeriod.substring(2, 6);
+
+			if (month < 1 || month > 12) {
+				log.debug("Invalid month in period code: {}", retPeriod);
+				return retPeriod;
+			}
+
+			return String.format("%02d/%s", month, year);
+		} catch (NumberFormatException ex) {
+			log.debug("Failed to format period code: {}", retPeriod, ex);
+			return retPeriod;
+		}
+	}
+
+	/**
+	 * Safe BigDecimal null handling
+	 */
+	private BigDecimal safe(BigDecimal value) {
+		return value == null ? ZERO : value;
+	}
+
+	/**
+	 * Calculate ratio safely
+	 */
+	private double calculateRatio(BigDecimal dbRatio, BigDecimal denominator, BigDecimal numerator) {
+		// Prefer database ratio if available
+		if (dbRatio != null) {
+			double val = dbRatio.setScale(4, RoundingMode.HALF_UP).doubleValue();
+			// Handle percentage values stored as 80 instead of 0.80
+			if (val > 1.0) {
+				val = val / 100.0;
+			}
+			return clampRatio(val);
+		}
+
+		BigDecimal safeDenom = safe(denominator);
+		BigDecimal safeNum = safe(numerator);
+
+		// Check division by zero
+		if (safeDenom.compareTo(ZERO) > 0) {
+			double result = safeNum.divide(safeDenom, 4, RoundingMode.HALF_UP).doubleValue();
+			return clampRatio(result);
+		}
+
+		return 0.0;
+	}
+
+	/**
+	 * Clamp ratio to valid range [0.0, 1.0]
+	 */
+	private double clampRatio(double value) {
+		if (Double.isNaN(value) || Double.isInfinite(value)) {
+			log.warn("Invalid ratio detected: {}. Resetting to 0.0", value);
+			return 0.0;
+		}
+		return Math.min(Math.max(value, 0.0), 1.0);
+	}
+
+	/**
+	 * Round ratio to 4 decimal places
+	 */
+	private double roundRatio(double value) {
+		return BigDecimal.valueOf(value).setScale(4, RoundingMode.HALF_UP).doubleValue();
+	}
+
+	/**
+	 * Scale BigDecimal to 2 decimal places
+	 */
+	private BigDecimal scale2(BigDecimal value) {
+		return safe(value).setScale(2, RoundingMode.HALF_UP);
+	}
+
+	/**
+	 * Normalize GSTIN (trim and uppercase)
+	 */
+	private String normalizeGstin(String gstin) {
+		return gstin == null ? "" : gstin.trim().toUpperCase();
+	}
+
+	/**
+	 * Validate GSTIN format
+	 */
+	private void validateGstin(String gstin) {
+		if (!hasText(gstin)) {
+			throw new GstAnalyticsException("GSTIN input parameter cannot be empty or null.");
+		}
+		if (!GSTIN_PATTERN.matcher(gstin).matches()) {
+			throw new GstAnalyticsException("Invalid GSTIN format. Expected: 2-char state code, 5-char PAN alphabet, "
+					+ "4-char entity number, 1-char entity type, 1-char subsidiary, Z, 1-char checksum. Provided: "
+					+ gstin);
+		}
+	}
+
+	/**
+	 * Check if string has text
+	 */
+	private boolean hasText(String value) {
+		return value != null && !value.trim().isEmpty();
+	}
+
+	// ====================== INNER CLASS:* AGGREGATED METRICS
+
+	/**
+	 * Container for aggregated metrics across all historical returns
+	 */
+	private static class AggregatedMetrics {
 		BigDecimal lifetimeTaxable = ZERO;
 		BigDecimal lifetimeCash = ZERO;
 		BigDecimal lifetimeItc = ZERO;
@@ -85,257 +482,7 @@ public class Return3bAnalysisService {
 		BigDecimal totalEligibleItc = ZERO;
 
 		List<Gstr3bMonthlyReturnDTO> historyList = new ArrayList<>();
-		List<ComplianceAlertDTO> alerts = new ArrayList<>();
-		Set<String> alertKeys = new HashSet<>();
-
-		double highestRiskScore = 0.0;
-		double latestRiskScore = 0.0;
-		boolean latestRiskCaptured = false;
-
-		// 4. Process Monthly Data
-		for (Return3BSummaryBean bean : historyBeans) {
-			if (bean == null) {
-				continue;
-			}
-
-			if (bean.getGstin() == null) {
-				bean.setGstin(normalizedGstin);
-			}
-
-			// Safe field extractions
-			BigDecimal taxableValue = safe(bean.getTaxableValue());
-			BigDecimal igst = safe(bean.getOutputIgst());
-			BigDecimal cgst = safe(bean.getOutputCgst());
-			BigDecimal sgst = safe(bean.getOutputSgst());
-			BigDecimal cess = safe(bean.getOutputCess());
-			BigDecimal outputTax = safe(bean.getTotalOutputTax());
-			BigDecimal itcClaimed = safe(bean.getUtilizedItc());
-			BigDecimal cashPaid = safe(bean.getCashTaxPaid());
-			BigDecimal rcmTax = safe(bean.getRcmTotalTax());
-			BigDecimal excessItc = safe(bean.getExcessItc());
-			BigDecimal eligibleItc=safe(bean.getEligibleItc());
-            log.info("ITC:"+safe(bean.getEligibleItc()));
-			// Accumulate Lifetime Metrics
-			lifetimeTaxable = lifetimeTaxable.add(taxableValue);
-			lifetimeCash = lifetimeCash.add(cashPaid);
-			lifetimeItc = lifetimeItc.add(itcClaimed);
-			lifetimeIgst = lifetimeIgst.add(igst);
-			lifetimeCgst = lifetimeCgst.add(cgst);
-			lifetimeSgst = lifetimeSgst.add(sgst);
-			lifetimeCess = lifetimeCess.add(cess);
-			lifetimeOutputTax = lifetimeOutputTax.add(outputTax);
-			lifetimeRcm = lifetimeRcm.add(rcmTax);
-			totalExcessItc = totalExcessItc.add(excessItc);
-			totalEligibleItc=totalEligibleItc.add(eligibleItc);
-			log.info("ITC EL:"+totalEligibleItc);
-			// Compute Financial Ratios
-			double itcRatio = calculateRatio(bean.getItcUtilizationRatio(), outputTax, itcClaimed);
-			double cashRatio = calculateRatio(bean.getCashPaymentRatio(), outputTax, cashPaid);
-
-			int filingDelayDays = bean.getFilingDelayDays() != null ? Math.max(bean.getFilingDelayDays(), 0) : 0;
-			String filingStatus = determineFilingStatus(bean, filingDelayDays);
-
-			// Evaluate Risk Score
-			double scoreVal = fetchRiskScore(bean);
-			scoreVal = normalizeRiskScore(scoreVal);
-
-			if (scoreVal > highestRiskScore) {
-				highestRiskScore = scoreVal;
-			}
-
-			if (!latestRiskCaptured) {
-				latestRiskScore = scoreVal;
-				latestRiskCaptured = true;
-			}
-
-			// Build Monthly DTO
-			Gstr3bMonthlyReturnDTO monthlyDto = Gstr3bMonthlyReturnDTO.builder().retPeriod(bean.getRetPeriod())
-					.formattedPeriod(formatPeriodCode(bean.getRetPeriod())).taxableValue(taxableValue).igst(igst)
-					.cgst(cgst).sgst(sgst).cess(cess).outputTax(outputTax).itcClaimed(itcClaimed)
-					.itcElligible(eligibleItc)
-					.cashPaid(cashPaid)
-					.rcmTax(rcmTax).itcRatio(roundRatio(itcRatio)).cashRatio(roundRatio(cashRatio))
-					.filingDelayDays(filingDelayDays).filingStatus(filingStatus).build();
-
-			historyList.add(monthlyDto);
-
-			// Analyze Risk & Compliance Alerts
-			evaluateReturnAlerts(bean, alerts, alertKeys, itcRatio, cashRatio);
-		}
-
-		// 5. Final Risk Categorization
-		double currentRiskScore = latestRiskCaptured ? latestRiskScore : highestRiskScore;
-		String overallRiskCategory = categorizeRiskScore(currentRiskScore);
-
-		// 6. Taxpayer Meta Info
-		String legalName = profile.map(DealerMaster::getLegalName).filter(this::hasText).orElse("N/A");
-		String tradeName = profile.map(DealerMaster::getTradeName).filter(this::hasText).orElse("N/A");
-		String jurisdiction = profile.map(DealerMaster::getStJuri).filter(this::hasText).orElse("N/A");
-		String status = profile.map(DealerMaster::getAuthStatus).filter(this::hasText).orElse("ACTIVE");
-
-		// 7. Construct Final Response Payload
-		GstinAnalysisResponse response = GstinAnalysisResponse.builder().gstin(normalizedGstin).legalName(legalName)
-				.tradeName(tradeName).jurisdiction(jurisdiction).taxpayerType("REGULAR").status(status)
-				.lifetimeTaxableValue(scale2(lifetimeTaxable))
-				.lifetimeItcEligible(scale2(totalEligibleItc))
-				.lifetimeCashPaid(scale2(lifetimeCash))
-				.lifetimeItcUtilized(scale2(lifetimeItc)).currentRiskScore(roundRatio(currentRiskScore))
-				.riskCategory(overallRiskCategory).last6MonthsHistory(historyList).activeAlerts(alerts).build();
-
-		log.info("Analysis generated successfully. gstin={}, returnsProcessed={}, riskCategory={}", normalizedGstin,
-				historyList.size(), overallRiskCategory);
-
-		return response;
-	}
-
-	/*
-	 * ============================================================ HELPER METHODS
-	 * ============================================================
-	 */
-
-	private double fetchRiskScore(Return3BSummaryBean bean) {
-		if (xgbService != null) {
-			try {
-				BigDecimal predictedScore = xgbService.predictRiskScore(bean);
-				if (predictedScore != null) {
-					return predictedScore.doubleValue();
-				}
-			} catch (Exception ex) {
-				log.warn("XGBoost scoring failed for period={}. Falling back to DB metric.", bean.getRetPeriod(), ex);
-			}
-		}
-		BigDecimal databaseScore = bean.getXgbRiskScore();
-		return databaseScore != null ? databaseScore.doubleValue() : 0.0;
-	}
-
-	private double normalizeRiskScore(double score) {
-		if (Double.isNaN(score) || Double.isInfinite(score) || score < 0) {
-			return 0.0;
-		}
-		if (score > 1.0 && score <= 100.0) {
-			score = score / 100.0;
-		}
-		return Math.min(Math.max(score, 0.0), 1.0);
-	}
-
-	private void evaluateReturnAlerts(Return3BSummaryBean bean, List<ComplianceAlertDTO> alerts, Set<String> alertKeys,
-			double itcRatio, double cashRatio) {
-		String period = bean.getRetPeriod();
-
-		if (itcRatio >= ITC_CRITICAL_THRESHOLD) {
-			addAlertIfAbsent(alerts, alertKeys, bean, "ITC-" + period,
-					"High Risk: ITC utilization exceeds 98% of total tax liability.", safe(bean.getExcessItc()),
-					"CRITICAL");
-		}
-
-		int filingDelayDays = bean.getFilingDelayDays() != null ? Math.max(bean.getFilingDelayDays(), 0) : 0;
-		if (filingDelayDays > FILING_DELAY_HIGH_DAYS) {
-			addAlertIfAbsent(alerts, alertKeys, bean, "DELAY-" + period,
-					"Filing Anomaly: Return filed with significant delay (" + filingDelayDays + " days).", ZERO,
-					"HIGH");
-		}
-
-		if (cashRatio >= CASH_HIGH_THRESHOLD) {
-			addAlertIfAbsent(alerts, alertKeys, bean, "CASH-" + period, "High cash tax payment dependency detected.",
-					ZERO, "MEDIUM");
-		}
-
-		BigDecimal excessItc = safe(bean.getExcessItc());
-		if (excessItc.compareTo(ZERO) > 0) {
-			addAlertIfAbsent(alerts, alertKeys, bean, "EXCESS-ITC-" + period, "Excess ITC claimed in the period.",
-					excessItc, "HIGH");
-		}
-	}
-
-	private void addAlertIfAbsent(List<ComplianceAlertDTO> alerts, Set<String> alertKeys, Return3BSummaryBean bean,
-			String alertKey, String message, BigDecimal excessItc, String severity) {
-		if (!alertKeys.add(alertKey)) {
-			return;
-		}
-
-		alerts.add(ComplianceAlertDTO.builder().id(UUID.randomUUID().toString()).gstin(bean.getGstin())
-				.retPeriod(bean.getRetPeriod()).message(message).excessItc(safe(excessItc)).severity(severity)
-				.formattedDate(LocalDate.now().format(DATE_FORMATTER)).build());
-	}
-
-	private String determineFilingStatus(Return3BSummaryBean bean, int filingDelayDays) {
-		if (bean.getFilingDate() == null) {
-			return "PENDING";
-		}
-		return filingDelayDays > 0 ? "DELAYED" : "FILED";
-	}
-
-	private String categorizeRiskScore(double score) {
-		if (score >= RISK_HIGH)
-			return "HIGH";
-		if (score >= RISK_MEDIUM)
-			return "MEDIUM";
-		return "LOW";
-	}
-
-	private String formatPeriodCode(String retPeriod) {
-		if (retPeriod == null || retPeriod.length() != 6) {
-			return retPeriod;
-		}
-		try {
-			int month = Integer.parseInt(retPeriod.substring(0, 2));
-			String year = retPeriod.substring(2, 6);
-			if (month < 1 || month > 12)
-				return retPeriod;
-			return String.format("%02d/%s", month, year);
-		} catch (NumberFormatException e) {
-			return retPeriod;
-		}
-	}
-
-	private BigDecimal safe(BigDecimal value) {
-		return value == null ? ZERO : value;
-	}
-
-	private double calculateRatio(BigDecimal dbRatio, BigDecimal denominator, BigDecimal numerator) {
-		if (dbRatio != null) {
-			double val = dbRatio.setScale(4, RoundingMode.HALF_UP).doubleValue();
-			if (val > 1.0)
-				val = val / 100.0;
-			return clampRatio(val);
-		}
-		BigDecimal safeDenom = safe(denominator);
-		BigDecimal safeNum = safe(numerator);
-
-		if (safeDenom.compareTo(ZERO) > 0) {
-			return clampRatio(safeNum.divide(safeDenom, 4, RoundingMode.HALF_UP).doubleValue());
-		}
-		return 0.0;
-	}
-
-	private double clampRatio(double value) {
-		if (Double.isNaN(value) || Double.isInfinite(value))
-			return 0.0;
-		return Math.min(Math.max(value, 0.0), 1.0);
-	}
-
-	private double roundRatio(double value) {
-		return BigDecimal.valueOf(value).setScale(4, RoundingMode.HALF_UP).doubleValue();
-	}
-
-	private BigDecimal scale2(BigDecimal value) {
-		return safe(value).setScale(2, RoundingMode.HALF_UP);
-	}
-
-	private String normalizeGstin(String gstin) {
-		return gstin == null ? "" : gstin.trim().toUpperCase();
-	}
-
-	private void validateGstin(String gstin) {
-		if (!hasText(gstin)) {
-			throw new IllegalArgumentException("GSTIN input parameter cannot be empty.");
-		}
-		if (!GSTIN_PATTERN.matcher(gstin).matches()) {
-			throw new IllegalArgumentException("Provided GSTIN string failed validation pattern: " + gstin);
-		}
-	}
-
-	private boolean hasText(String value) {
-		return value != null && !value.trim().isEmpty();
+		double currentRiskScore = 0.0;
+		String riskCategory = "LOW";
 	}
 }

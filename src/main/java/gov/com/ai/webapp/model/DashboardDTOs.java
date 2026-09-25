@@ -5,6 +5,7 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.List;
 
 public class DashboardDTOs {
@@ -23,6 +24,7 @@ public class DashboardDTOs {
 	    private String status;
 	    
 	    private BigDecimal lifetimeOutputTax;
+	    private BigDecimal lifetaxableValue;
 	    private BigDecimal lifetimeIgst;
 	    private BigDecimal lifetimeCgst;
 	    private BigDecimal lifetimeSgst;
@@ -66,7 +68,7 @@ public class DashboardDTOs {
 	    private BigDecimal cess;
 	    private BigDecimal outputTax;
 	    private BigDecimal itcClaimed;
-	    private BigDecimal itcElligible;
+	    private BigDecimal itcEligible;
 	    private BigDecimal cashPaid;
 	    private BigDecimal rcmTax;
 	    private Double itcRatio;
@@ -151,18 +153,28 @@ public class DashboardDTOs {
 		private String riskCategory;
 	}
 
-	@Data
+	@Data	
 	@Builder
 	@NoArgsConstructor
 	@AllArgsConstructor
 	public static class ComplianceAlertDTO {
-		private String id;
-		private String gstin;
-		private String retPeriod;
-		private String message;
-		private BigDecimal excessItc;
-		private String formattedDate;
-		private String severity;
+	    private String id;
+	    private String gstin;
+	    private String retPeriod;
+	    private String message;
+	    private BigDecimal excessItc;
+	    private String severity;              // CRITICAL, HIGH, MEDIUM, LOW
+	    private String formattedDate;
+	    
+	    // NEW FIELDS FOR RISK ASSESSMENT INTEGRATION
+	    private String riskLevel;             // HIGH, MEDIUM, LOW
+	    private Integer compositeScore;       // 0-100 risk score
+	    private String findingCode;           // e.g., ITC_EXCESS_UTILIZED
+	    private String category;              // ITC, RCM, COMPLIANCE, AI_MODEL
+	    private String legalBasis;            // Statutory reference
+	    private BigDecimal evidenceValue;     // Quantitative support
+	    private Long assessmentId;            // Link to assessment record
+	    private LocalDateTime createdAt;
 	}
 	
 	/* =========================================================

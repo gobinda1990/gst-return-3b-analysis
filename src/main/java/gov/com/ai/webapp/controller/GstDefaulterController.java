@@ -1,12 +1,14 @@
 package gov.com.ai.webapp.controller;
 
-
-
 import jakarta.validation.constraints.Pattern;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
+
+import com.esotericsoftware.minlog.Log;
 
 import gov.com.ai.webapp.model.GstDefaulterRecord;
 import gov.com.ai.webapp.model.PagedAuditResponse;
@@ -16,7 +18,8 @@ import gov.com.ai.webapp.service.ReturnDefaulterService;
 @RequestMapping("/gst/return-3b")
 @RequiredArgsConstructor
 @Validated
-@CrossOrigin(origins = "*")
+@CrossOrigin(origins = "http://localhost:5173")
+@Slf4j
 public class GstDefaulterController {
 
     private final ReturnDefaulterService service;
@@ -37,6 +40,7 @@ public class GstDefaulterController {
             @RequestParam(name = "page", defaultValue = "0") int page,
             @RequestParam(name = "size", defaultValue = "10") int size) {
             
+    	Log.info("return default list:---");
         PagedAuditResponse<GstDefaulterRecord> response = service.getDefaulterPipeline(retPeriod, page, size);
         return ResponseEntity.ok(response);
     }
