@@ -10,7 +10,6 @@ import org.springframework.web.bind.annotation.*;
 
 @RestController
 @RequestMapping("/gst/return-3b")
-@CrossOrigin(origins = "*")
 @Slf4j
 @RequiredArgsConstructor
 public class PredictionController {

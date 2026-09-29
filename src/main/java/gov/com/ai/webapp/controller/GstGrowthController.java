@@ -3,28 +3,21 @@ package gov.com.ai.webapp.controller;
 import gov.com.ai.webapp.model.ReturnPeriodOptionDto;
 import gov.com.ai.webapp.model.dto.*;
 import gov.com.ai.webapp.service.GstGrowthService;
-
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Pattern;
-
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-
+import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
-
 import org.springframework.validation.annotation.Validated;
-
 import org.springframework.web.bind.annotation.*;
-
-import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
-
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.io.OutputStreamWriter;
-
 import java.nio.charset.StandardCharsets;
-
 import java.util.List;
 
 @Slf4j
@@ -35,17 +28,19 @@ import java.util.List;
 /*
  * FIX: CORS is now configured globally in CorsConfig (see
  * gov.com.ai.webapp.config), not per-controller. A controller-level
+ * 
  * @CrossOrigin only covers requests this controller actually handles - a
  * request that doesn't match any mapping here (e.g. a frontend/backend
- * base-path mismatch) would fall through to Spring's default error
- * handling with no CORS headers at all, which is what the browser reports
- * as a generic network error. The global config in CorsConfig covers every
- * path, matched or not, and reads the same app.cors.allowed-origins
- * property.
+ * base-path mismatch) would fall through to Spring's default error handling
+ * with no CORS headers at all, which is what the browser reports as a generic
+ * network error. The global config in CorsConfig covers every path, matched or
+ * not, and reads the same app.cors.allowed-origins property.
  */
 public class GstGrowthController {
 
 	private static final String PERIOD_PATTERN = "(0[1-9]|1[0-2])\\d{4}";
+
+	private static final MediaType CSV_MEDIA_TYPE = new MediaType("text", "csv", StandardCharsets.UTF_8);
 
 	private final GstGrowthService service;
 
@@ -104,32 +99,38 @@ public class GstGrowthController {
 
 			@RequestParam(defaultValue = "10") @Min(1) @Max(100) int size) {
 
-		log.debug("GET /taxpayers period={} office={} search={} trend={} riskLevel={} page={} size={}", period,
-				office, search, trend, riskLevel, page, size);
+		log.debug("GET /taxpayers period={} office={} search={} trend={} riskLevel={} page={} size={}", period, office,
+				search, trend, riskLevel, page, size);
 
 		return ResponseEntity.ok(service.getTaxpayers(period, office, search, trend, riskLevel, page, size));
 	}
 
 	/*
-	 * FIX: previously ResponseEntity.ok() committed the 200 status
-	 * immediately, and the actual validation + query only ran once the
-	 * StreamingResponseBody lambda executed — by which point the status
-	 * code can no longer be changed. An invalid period, or a DB failure
-	 * mid-export, silently produced a truncated "successful" CSV with
-	 * nothing in the logs.
+	 * FIX: previously ResponseEntity.ok() committed the 200 status immediately, and
+	 * the actual validation + query only ran once the StreamingResponseBody lambda
+	 * executed — by which point the status code can no longer be changed. An
+	 * invalid period, or a DB failure mid-export, silently produced a truncated
+	 * "successful" CSV with nothing in the logs.
 	 *
-	 * The @Pattern below now rejects a malformed period with a proper 400
-	 * (via GstGrowthExceptionHandler) *before* this method body — and
-	 * therefore before the streaming response — ever starts. That covers
-	 * the most common failure. A genuine failure that only surfaces once
-	 * streaming has begun (e.g. the DB going away mid-export) still can't
-	 * change the HTTP status once bytes have been sent — no code can fix
-	 * that after the fact — but it's now caught, logged with full context,
-	 * and rethrown so the connection aborts cleanly instead of failing
-	 * silently.
+	 * The @Pattern below now rejects a malformed period with a proper 400 (via
+	 * GstGrowthExceptionHandler) *before* this method body — and therefore before
+	 * the streaming response — ever starts. That covers the most common failure. A
+	 * genuine failure that only surfaces once streaming has begun (e.g. the DB
+	 * going away mid-export) still can't change the HTTP status once bytes have
+	 * been sent — no code can fix that after the fact — but it's now caught, logged
+	 * with full context, and rethrown so the connection aborts cleanly instead of
+	 * failing silently.
+	 */
+	/**
+	 * Export GST 3B growth analytics as CSV.
+	 *
+	 * Example:
+	 *
+	 * GET /gst/return-3b/growth/export ?period=062026 &office=KOLKATA
+	 * &trend=STRONG_DECLINE &riskLevel=HIGH
 	 */
 	@GetMapping(value = "/export", produces = "text/csv")
-	public ResponseEntity<StreamingResponseBody> export(
+	public ResponseEntity<byte[]> export(
 			@RequestParam @Pattern(regexp = PERIOD_PATTERN, message = "period must be MMYYYY") String period,
 
 			@RequestParam(required = false) String office,
@@ -140,41 +141,101 @@ public class GstGrowthController {
 
 			@RequestParam(required = false) String riskLevel) {
 
-		log.info("GET /export period={} office={} search={} trend={} riskLevel={}", period, office, search, trend,
-				riskLevel);
+		/*
+		 * Normalize optional filters before passing them to the service/repository
+		 * layer.
+		 */
+		final String normalizedPeriod = period.trim();
 
-		String filename = "gst-3b-growth-" + period + ".csv";
+		final String normalizedOffice = normalizeNullable(office);
 
-		StreamingResponseBody body = outputStream -> {
+		final String normalizedSearch = normalizeNullable(search);
 
-			/*
-			 * Do not close outputStream directly. Spring owns it.
-			 */
-			OutputStreamWriter writer = new OutputStreamWriter(outputStream, StandardCharsets.UTF_8);
+		final String normalizedTrend = normalizeNullable(trend);
 
-			try {
+		final String normalizedRiskLevel = normalizeNullable(riskLevel);
 
-				service.exportCsv(period, office, search, trend, riskLevel, writer);
+		log.info("GET /export period={} office={} search={} trend={} riskLevel={}", normalizedPeriod, normalizedOffice,
+				normalizedSearch, normalizedTrend, normalizedRiskLevel);
 
-				writer.flush();
+		byte[] csv = generateCsv(normalizedPeriod, normalizedOffice, normalizedSearch, normalizedTrend,
+				normalizedRiskLevel);
 
-			} catch (Exception ex) {
+		String filename = "gst-3b-growth-" + normalizedPeriod + ".csv";
 
-				log.error("GST growth CSV export failed mid-stream period={} office={} search={} trend={} riskLevel={}",
-						period, office, search, trend, riskLevel, ex);
-
-				throw ex;
-			}
-		};
+		ContentDisposition disposition = ContentDisposition.attachment().filename(filename, StandardCharsets.UTF_8)
+				.build();
 
 		return ResponseEntity.ok()
 
-				.header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
+				.header(HttpHeaders.CONTENT_DISPOSITION, disposition.toString())
 
-				.header(HttpHeaders.CACHE_CONTROL, "no-store")
+				.header(HttpHeaders.CACHE_CONTROL, "no-store, no-cache, must-revalidate")
 
-				.contentType(new MediaType("text", "csv", StandardCharsets.UTF_8))
+				.header(HttpHeaders.PRAGMA, "no-cache")
 
-				.body(body);
+				.contentType(CSV_MEDIA_TYPE)
+
+				.contentLength(csv.length)
+
+				.body(csv);
+	}
+
+	/**
+	 * Generate complete CSV before committing the HTTP response.
+	 *
+	 * This is intentional:
+	 *
+	 * If CSV generation fails, Spring can still invoke the normal exception handler
+	 * and return a proper error response.
+	 */
+	private byte[] generateCsv(String period, String office, String search, String trend, String riskLevel) {
+
+		try (ByteArrayOutputStream output = new ByteArrayOutputStream(64 * 1024);
+
+				OutputStreamWriter writer = new OutputStreamWriter(output, StandardCharsets.UTF_8)) {
+
+			/*
+			 * UTF-8 BOM.
+			 *
+			 * This improves compatibility with Microsoft Excel when taxpayer/trade/office
+			 * names contain Unicode.
+			 */
+			writer.write('\uFEFF');
+
+			service.exportCsv(period, office, search, trend, riskLevel, writer);
+
+			writer.flush();
+
+			return output.toByteArray();
+
+		} catch (IOException ex) {
+
+			log.error("Unable to generate GST growth CSV " + "period={} office={} search={} trend={} riskLevel={}",
+					period, office, search, trend, riskLevel, ex);
+
+			throw new IllegalStateException("Unable to generate GST growth CSV.", ex);
+
+		} catch (RuntimeException ex) {
+
+			log.error("GST growth CSV generation failed " + "period={} office={} search={} trend={} riskLevel={}",
+					period, office, search, trend, riskLevel, ex);
+
+			throw ex;
+		}
+	}
+
+	/**
+	 * Convert blank optional parameters to null.
+	 */
+	private String normalizeNullable(String value) {
+
+		if (value == null) {
+			return null;
+		}
+
+		String normalized = value.trim();
+
+		return normalized.isEmpty() ? null : normalized;
 	}
 }

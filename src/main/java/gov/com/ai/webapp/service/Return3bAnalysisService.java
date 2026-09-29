@@ -79,7 +79,7 @@ public class Return3bAnalysisService {
 			List<Return3BSummaryBean> historyBeans = Optional
 					.ofNullable(return3bRepository.findHistory(normalizedGstin, historicalMonthsLookback))
 					.orElse(new ArrayList<>());
-
+			log.info("Size:--"+historyBeans.size());
 			if (historyBeans.isEmpty()) {
 				log.warn("No historical returns found for gstin={}", normalizedGstin);
 			}
