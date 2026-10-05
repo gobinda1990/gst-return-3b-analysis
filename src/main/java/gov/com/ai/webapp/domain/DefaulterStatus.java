@@ -1,0 +1,15 @@
+package gov.com.ai.webapp.domain;
+
+public enum DefaulterStatus {
+    NOT_DUE,
+    FILED_ON_TIME,
+    FILED_LATE,
+    RETURN_PENDING,
+    GSTR3A_ELIGIBLE,
+    GSTR3A_COMPLIANCE_PENDING,
+    COMPLIED_AFTER_GSTR3A,
+    SECTION62_ELIGIBLE,
+    ASMT13_ISSUED,
+    ASMT13_DEEMED_WITHDRAWN,
+    ASMT13_FINAL
+}

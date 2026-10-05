@@ -64,10 +64,9 @@ public class GstGrowthController {
 	@GetMapping("/summary")
 	public ResponseEntity<GrowthSummaryResponse> summary(
 			@RequestParam @Pattern(regexp = PERIOD_PATTERN, message = "period must be MMYYYY") String period,
-
 			@RequestParam(required = false) String office) {
 
-		log.debug("GET /summary period={} office={}", period, office);
+		log.info("GET /summary period={} office={}", period, office);
 
 		return ResponseEntity.ok(service.getSummary(period, office));
 	}

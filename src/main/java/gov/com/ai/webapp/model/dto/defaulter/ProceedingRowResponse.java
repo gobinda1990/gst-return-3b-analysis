@@ -1,0 +1,43 @@
+package gov.com.ai.webapp.model.dto.defaulter;
+
+import java.math.BigDecimal;
+import java.time.LocalDate;
+
+public record ProceedingRowResponse(
+        Long id,
+        String gstin,
+        String retPeriod,
+        String returnType,
+        String filingFrequency,
+        String taxpayerCategory,
+        LocalDate dueDate,
+        LocalDate filingDate,
+        String status,
+        String gstr3aEligible,
+        String gstr3aRefNo,
+        LocalDate gstr3aIssueDate,
+        LocalDate gstr3aServiceDate,
+        LocalDate gstr3aDeadline,
+        String gstr3aStatus,
+        String section62Eligible,
+        LocalDate section62EligibleDate,
+        String asmt13RefNo,
+        LocalDate asmt13OrderDate,
+        LocalDate asmt13ServiceDate,
+        String asmt13Status,
+        BigDecimal assessedTax,
+        BigDecimal assessedInterest,
+        BigDecimal assessedPenalty,
+        BigDecimal assessedLateFee,
+        BigDecimal assessedOther,
+        BigDecimal assessedTotal,
+        LocalDate first60DayEnd,
+        LocalDate extended60DayEnd,
+        LocalDate orderWithdrawnDate,
+        String stJuri,
+        String officeCode,
+        String officeName,
+        String createdBy,
+        String updatedBy,
+        Long versionNo
+) {}
