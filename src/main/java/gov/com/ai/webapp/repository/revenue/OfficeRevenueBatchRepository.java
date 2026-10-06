@@ -70,7 +70,7 @@ public class OfficeRevenueBatchRepository {
 				           AND GSTIN IN (SELECT GSTIN FROM GST_RET_3B_SUMMARY WHERE RET_PERIOD = :p)
 				         GROUP BY GSTIN) r ON r.GSTIN = s.GSTIN
 				  JOIN (SELECT JURISDICTION_CODE, MAX(%s) %s
-				          FROM gst_master_jurisdiction
+				          FROM gst_master_juri_new
 				         WHERE JURISDICTION_CODE IS NOT NULL
 				         GROUP BY JURISDICTION_CODE) j ON j.JURISDICTION_CODE = r.ST_JURI
 				 WHERE s.RET_PERIOD = :p AND s.GSTIN IS NOT NULL
@@ -121,7 +121,7 @@ public class OfficeRevenueBatchRepository {
 
 	private static final String DELETE_OFFICE = "DELETE FROM GST_3B_OFFICE_MONTHLY_REVENUE WHERE RET_PERIOD=:p AND ST_JURI=:j";
 
-	// ------------------------------------------------------------------ pre-checks
+	// -------------------- pre-checks
 
 	public long countSourceRows(String p) {
 		return q("SELECT COUNT(*) FROM GST_RET_3B_SUMMARY WHERE RET_PERIOD=:p", p);
@@ -149,7 +149,7 @@ public class OfficeRevenueBatchRepository {
 
 	public long countUnmappedJurisdictions(String p) {
 		return q(
-				"SELECT COUNT(DISTINCT s.GSTIN) FROM GST_RET_3B_SUMMARY s JOIN GST_DEALER_MASTER_WBCOMTAX r ON r.GSTIN=s.GSTIN LEFT JOIN gst_master_jurisdiction j ON j.JURISDICTION_CODE=r.ST_JURI WHERE s.RET_PERIOD=:p AND r.ST_JURI IS NOT NULL AND j.JURISDICTION_CODE IS NULL",
+				"SELECT COUNT(DISTINCT s.GSTIN) FROM GST_RET_3B_SUMMARY s JOIN GST_DEALER_MASTER_WBCOMTAX r ON r.GSTIN=s.GSTIN LEFT JOIN gst_master_juri_new j ON j.JURISDICTION_CODE=r.ST_JURI WHERE s.RET_PERIOD=:p AND r.ST_JURI IS NOT NULL AND j.JURISDICTION_CODE IS NULL",
 				p);
 	}
 

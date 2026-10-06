@@ -1,5 +1,6 @@
 package gov.com.ai.webapp.service.revenue;
 
+import gov.com.ai.webapp.config.CacheConfig;
 import gov.com.ai.webapp.exception.RevenueRequestException;
 import gov.com.ai.webapp.model.revenue.OfficeRevenueDashboardResponse;
 import gov.com.ai.webapp.model.revenue.OfficeRevenueRowResponse;
@@ -20,6 +21,7 @@ import java.io.UncheckedIOException;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Pattern;
@@ -32,7 +34,8 @@ import java.util.regex.Pattern;
  *   <li>Cache keys are built from <b>normalised</b> values, so {@code office=""}, {@code office=null} and
  *       {@code growthStatus=high} / {@code HIGH} share one entry.</li>
  *   <li>Summaries that use free-text {@code search} are never cached (unbounded key space).</li>
- *   <li>Configure a TTL and a maximum size on these caches (Caffeine or Redis), see {@link #CACHE_NAMES}.</li>
+ *   <li>Cached methods never return null (the cache manager rejects null values) and return immutable lists.</li>
+ *   <li>Cache names, TTLs and sizes are defined once in {@link CacheConfig}.</li>
  * </ul>
  */
 @Slf4j
@@ -40,18 +43,21 @@ import java.util.regex.Pattern;
 @RequiredArgsConstructor
 public class OfficeRevenueDashboardService {
 
-	public static final String CACHE_SUMMARY = "officeRevenueSummary";
-	public static final String CACHE_TREND = "officeRevenueTrend";
-	public static final String CACHE_PERIODS = "officeRevenuePeriods";
-	public static final String CACHE_OFFICES = "officeRevenueOffices";
-	public static final List<String> CACHE_NAMES = List.of(CACHE_SUMMARY, CACHE_TREND, CACHE_PERIODS, CACHE_OFFICES);
+	public static final String CACHE_SUMMARY = CacheConfig.CACHE_OFFICE_REVENUE_SUMMARY;
+	public static final String CACHE_TREND = CacheConfig.CACHE_OFFICE_REVENUE_TREND;
+	public static final String CACHE_PERIODS = CacheConfig.CACHE_OFFICE_REVENUE_PERIODS;
+	public static final String CACHE_OFFICES = CacheConfig.CACHE_OFFICE_REVENUE_OFFICES;
 
-	/** Single source of truth for the growth-status filter. Keep in sync with the values stored in the DB. */
-	public static final Set<String> GROWTH_STATUSES = Set.of("HIGH", "MEDIUM", "LOW", "STABLE", "DECLINING", "NO_BASE");
+	/**
+	 * Single source of truth for the growth-status filter. The controller regex must list the same values,
+	 * and both must match the values stored in the DB.
+	 */
+	public static final Set<String> GROWTH_STATUSES = Set.of("HIGH", "MEDIUM", "LOW", "STABLE", "DECLINING",
+			"NO_BASE");
 
 	private static final Pattern PERIOD = Pattern.compile("(0[1-9]|1[0-2])20\\d{2}");
 	private static final int MAX_SEARCH = 100;
-	private static final int MAX_OFFICE = 50;
+	private static final int MAX_OFFICE = 100; // keep equal to @Size(max) in the controller
 	private static final int MAX_PAGE_SIZE = 100;
 	private static final int MAX_MONTHS = 36;
 	private static final long SLOW_MS = 2_000;
@@ -63,16 +69,16 @@ public class OfficeRevenueDashboardService {
 	private final OfficeRevenueDashboardRepository repo;
 
 	// ---------------------------------------------------------------- queries
-	// The method bodies below only run on a cache miss, so the "loaded" log lines double as miss counters.
+	// Method bodies only run on a cache miss, so the "loaded" log lines double as miss counters.
 
 	@Cacheable(cacheNames = CACHE_SUMMARY, key = "#root.target.summaryKey(#p0)",
 			condition = "#root.target.cacheable(#p0)", sync = true)
 	public OfficeRevenueDashboardResponse summary(RevenueDashboardFilter f) {
 		long t0 = System.nanoTime();
 		RevenueDashboardFilter v = valid(f);
-		OfficeRevenueDashboardResponse r = repo.summary(v);
-		logLoaded("summary", t0, "period=" + v.retPeriod() + " office=" + v.office() + " growth=" + v.growthStatus()
-				+ " search=" + (v.search() != null));
+		OfficeRevenueDashboardResponse r = Objects.requireNonNull(repo.summary(v), "repo.summary returned null");
+		logLoaded("summary", t0, "period=" + v.retPeriod() + " office=" + v.office() + " growth="
+				+ v.growthStatus() + " search=" + (v.search() != null));
 		return r;
 	}
 
@@ -94,7 +100,7 @@ public class OfficeRevenueDashboardService {
 		int months = clamp(m, 1, MAX_MONTHS);
 		List<OfficeRevenueTrendResponse> r = repo.trend(period, office, months);
 		logLoaded("trend", t0, "period=" + period + " office=" + office + " months=" + months);
-		return r;
+		return r == null ? List.of() : List.copyOf(r);
 	}
 
 	@Cacheable(cacheNames = CACHE_PERIODS, key = "'ALL'", sync = true)
@@ -102,7 +108,7 @@ public class OfficeRevenueDashboardService {
 		long t0 = System.nanoTime();
 		List<OptionDto> r = repo.periods();
 		logLoaded("periods", t0, "");
-		return r;
+		return r == null ? List.of() : List.copyOf(r);
 	}
 
 	@Cacheable(cacheNames = CACHE_OFFICES, key = "#root.target.periodKey(#p0)", sync = true)
@@ -111,10 +117,18 @@ public class OfficeRevenueDashboardService {
 		String period = period(p);
 		List<OptionDto> r = repo.offices(period);
 		logLoaded("offices", t0, "period=" + period);
-		return r;
+		return r == null ? List.of() : List.copyOf(r);
 	}
 
 	// ----------------------------------------------------------------- export
+
+	/**
+	 * Validates and normalises a filter. The controller calls this BEFORE starting the streaming response,
+	 * so a bad request gets a proper 400 instead of an empty 200 CSV.
+	 */
+	public RevenueDashboardFilter validate(RevenueDashboardFilter f) {
+		return valid(f);
+	}
 
 	public void export(RevenueDashboardFilter f, BufferedWriter w) throws IOException {
 		RevenueDashboardFilter v = valid(f);
@@ -150,7 +164,10 @@ public class OfficeRevenueDashboardService {
 
 	// ------------------------------------------------------------------ cache
 
-	/** Call after the batch has refreshed data. Must be invoked from another bean so the proxy applies. */
+	/**
+	 * Call after the monthly batch has refreshed data. Must be invoked from another bean
+	 * (self-invocation bypasses the Spring proxy and would evict nothing).
+	 */
 	@CacheEvict(cacheNames = { CACHE_SUMMARY, CACHE_TREND, CACHE_PERIODS, CACHE_OFFICES }, allEntries = true)
 	public void evictDashboardCaches() {
 		log.info("Office revenue dashboard caches evicted");
@@ -163,7 +180,8 @@ public class OfficeRevenueDashboardService {
 		if (f == null) {
 			return "NULL";
 		}
-		return String.join("|", keyPart(f.retPeriod()), keyPart(f.office()), keyPart(upper(f.growthStatus())));
+		return String.join("|", keyPart(f.retPeriod()), keyPart(f.office()), keyPart(upper(f.growthStatus())),
+				Integer.toString(Math.max(f.page(), 0)), Integer.toString(clamp(f.size(), 1, MAX_PAGE_SIZE)));
 	}
 
 	/** Only filters without free-text search are cached. */

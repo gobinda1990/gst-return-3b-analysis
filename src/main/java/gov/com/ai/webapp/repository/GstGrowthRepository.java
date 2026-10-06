@@ -28,60 +28,31 @@ public class GstGrowthRepository {
 	private static final int EXPORT_FETCH_SIZE = 1000;
 
 	private final JdbcTemplate jdbcTemplate;
+	
+	private static final String RET_PRD_QUERY=" SELECT DISTINCT RET_PERIOD, PERIOD_DATE FROM GST_3B_GROWTH_ANALYTICS  "
+			+ " ORDER BY PERIOD_DATE DESC ";
+	
+	private static final String JURI_OFFICE_QUERY=" SELECT JURISDICTION_CODE, MERGED_JURISDICTION FROM gst_master_juri_new  "
+			+ " ORDER BY JURISDICTION_CODE ";
+	
+	
 
-	/*
-	 * ======================================================== COMMON JOINS
-	 * ========================================================
-	 *
-	 * Risk profile MUST join on GSTIN + RET_PERIOD.
-	 */
-	private static final String COMMON_FROM = """
+	// ======== COMMON JOINS Risk profile MUST join on GSTIN + RET_PERIOD.
+	
+	private static final String COMMON_FROM = " FROM GST_3B_GROWTH_ANALYTICS g 	LEFT JOIN  "
+			+ " GST_DEALER_MASTER_WBCOMTAX d ON d.GSTIN = g.GSTIN "
+			+ " LEFT JOIN gst_master_jurisdiction j  ON j.JURISDICTION_CODE = d.ST_JURI "
+			+ " LEFT JOIN GST_RET_3B_RISK_PROFILE r   ON r.GSTIN = g.GSTIN "
+			+ " AND r.RET_PERIOD = g.RET_PERIOD " ;
+			
 
-			FROM GST_3B_GROWTH_ANALYTICS g
-
-			LEFT JOIN GST_DEALER_MASTER_WBCOMTAX d
-			       ON d.GSTIN = g.GSTIN
-
-			LEFT JOIN gst_master_jurisdiction j
-			       ON j.JURISDICTION_CODE = d.ST_JURI
-
-			LEFT JOIN GST_RET_3B_RISK_PROFILE r
-			       ON r.GSTIN = g.GSTIN
-			      AND r.RET_PERIOD = g.RET_PERIOD
-
-			""";
-
-	/*
-	 * ======================================================== PERIODS
-	 * ========================================================
-	 */
+	//============== PERIODS
 
 	public List<ReturnPeriodOptionDto> findReturnPeriods() {
-
-		String sql = """
-
-				SELECT DISTINCT RET_PERIOD
-
-				FROM GST_3B_GROWTH_ANALYTICS
-
-				WHERE RET_PERIOD IS NOT NULL
-
-				  AND REGEXP_LIKE(
-				        RET_PERIOD,
-				        '^(0[1-9]|1[0-2])[0-9]{4}$'
-				      )
-
-				ORDER BY
-				    SUBSTR(RET_PERIOD, 3, 4) DESC,
-				    SUBSTR(RET_PERIOD, 1, 2) DESC
-
-				""";
-
 		long start = System.currentTimeMillis();
-
 		try {
 
-			List<ReturnPeriodOptionDto> result = jdbcTemplate.query(sql, (rs, rowNum) -> {
+			List<ReturnPeriodOptionDto> result = jdbcTemplate.query(RET_PRD_QUERY, (rs, rowNum) -> {
 
 				String period = rs.getString("RET_PERIOD");
 
@@ -100,57 +71,25 @@ public class GstGrowthRepository {
 		}
 	}
 
-	/*
-	 * ======================================================== OFFICES
-	 * ========================================================
-	 */
+	//========= OFFICES ========================
 
 	public List<OfficeOptionResponse> findOffices(String period) {
 
-		String sql = """
-
-				SELECT DISTINCT
-				       d.ST_JURI,
-				       j.JURISDICTION_NAME
-
-				FROM GST_3B_GROWTH_ANALYTICS g
-
-				JOIN GST_DEALER_MASTER_WBCOMTAX d
-				  ON d.GSTIN = g.GSTIN
-
-				JOIN gst_master_jurisdiction j
-				  ON j.JURISDICTION_CODE = d.ST_JURI
-
-				WHERE g.RET_PERIOD = ?
-
-				  AND d.ST_JURI IS NOT NULL
-
-				  AND j.JURISDICTION_NAME IS NOT NULL
-
-				ORDER BY j.JURISDICTION_NAME
-
-				""";
-
 		long start = System.currentTimeMillis();
-
 		try {
+		    List<OfficeOptionResponse> result = jdbcTemplate.query(
+		        JURI_OFFICE_QUERY,
+		        (rs, rowNum) -> OfficeOptionResponse.builder()
+		                .value(rs.getString("JURISDICTION_CODE"))
+		                .label(rs.getString("MERGED_JURISDICTION"))
+		                .build()); 
 
-			List<OfficeOptionResponse> result = jdbcTemplate.query(sql,
-
-					(rs, rowNum) -> OfficeOptionResponse.builder().value(rs.getString("ST_JURI"))
-							.label(rs.getString("JURISDICTION_NAME")).build(),
-
-					period);
-
-			log.debug("Loaded growth offices period={} count={} durationMs={}", period, result.size(), elapsed(start));
-
-			return result;
+		    log.debug("Loaded growth offices period={} count={} durationMs={}", period, result.size(), elapsed(start));
+		    return result;
 
 		} catch (DataAccessException ex) {
-
-			log.error("Failed loading growth offices period={}", period, ex);
-
-			throw new GrowthDataAccessException("Failed to load offices", ex);
+		    log.error("Failed loading growth offices period={}", period, ex);
+		    throw new GrowthDataAccessException("Failed to load offices", ex);
 		}
 	}
 
@@ -167,16 +106,7 @@ public class GstGrowthRepository {
 		FilterSql filter = buildFilter(period, office, search, trend, riskLevel);
 
 		String countSql = "SELECT COUNT(*) " + COMMON_FROM + filter.where();
-
-		/*
-		 * FIX: Oracle 11g has no OFFSET/FETCH NEXT (that syntax is 12c+; on 11g it
-		 * fails with ORA-00933 on every paginated request). Standard 11g pagination is
-		 * the ROWNUM double-wrap below: 1. innermost query does the real SELECT + ORDER
-		 * BY 2. middle wrap assigns ROWNUM (must happen AFTER the ORDER BY is applied -
-		 * assigning it earlier numbers rows before the sort and pagination silently
-		 * returns the wrong rows) 3. outer wrap keeps only the RNUM range for the
-		 * requested page
-		 */
+		
 		String dataSql = """
 				SELECT * FROM (
 				    SELECT inner_query.*, ROWNUM RNUM FROM (
@@ -283,10 +213,7 @@ public class GstGrowthRepository {
 		}
 	}
 
-	/*
-	 * ======================================================== SUMMARY
-	 * ========================================================
-	 */
+	//================ SUMMARY
 
 	public GrowthSummaryResponse findSummary(String period, String office) {
 

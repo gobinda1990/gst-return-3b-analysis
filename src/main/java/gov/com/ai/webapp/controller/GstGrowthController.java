@@ -25,17 +25,6 @@ import java.util.List;
 @RestController
 @RequiredArgsConstructor
 @RequestMapping("/gst/return-3b/growth")
-/*
- * FIX: CORS is now configured globally in CorsConfig (see
- * gov.com.ai.webapp.config), not per-controller. A controller-level
- * 
- * @CrossOrigin only covers requests this controller actually handles - a
- * request that doesn't match any mapping here (e.g. a frontend/backend
- * base-path mismatch) would fall through to Spring's default error handling
- * with no CORS headers at all, which is what the browser reports as a generic
- * network error. The global config in CorsConfig covers every path, matched or
- * not, and reads the same app.cors.allowed-origins property.
- */
 public class GstGrowthController {
 
 	private static final String PERIOD_PATTERN = "(0[1-9]|1[0-2])\\d{4}";

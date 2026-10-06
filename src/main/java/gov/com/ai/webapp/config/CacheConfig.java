@@ -6,107 +6,84 @@ import org.springframework.cache.annotation.EnableCaching;
 import org.springframework.cache.caffeine.CaffeineCacheManager;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-
 import java.time.Duration;
 
 @Configuration
 @EnableCaching
 public class CacheConfig {
 
-    // Analytics Cache Names
-    public static final String CACHE_DEFAULTERS_BY_PERIOD = "defaultersByPeriod";
-    public static final String CACHE_AUDIT_PIPELINE_BY_PERIOD = "auditPipelineByPeriod";
-    public static final String CACHE_GST_ANALYTICS = "gstAnalytics";
-    public static final String CACHE_GST_ITC_ANALYTICS = "gstItcAnalyticsCache";
+	// Analytics cache names
+	public static final String CACHE_DEFAULTERS_BY_PERIOD = "defaultersByPeriod";
+	public static final String CACHE_AUDIT_PIPELINE_BY_PERIOD = "auditPipelineByPeriod";
+	public static final String CACHE_GST_ANALYTICS = "gstAnalytics";
+	public static final String CACHE_GST_ITC_ANALYTICS = "gstItcAnalyticsCache";
 
-    // Growth Service Cache Names
-    public static final String CACHE_GROWTH_SUMMARY = "growthSummary";
-    public static final String CACHE_GROWTH_TREND = "growthTrend";
+	// Growth service cache names
+	public static final String CACHE_GROWTH_SUMMARY = "growthSummary";
+	public static final String CACHE_GROWTH_TREND = "growthTrend";
+	public static final String CACHE_GROWTH_PERIODS = "growthPeriods";
+	public static final String CACHE_GROWTH_OFFICES = "growthOffices";
+	public static final String CACHE_GROWTH_TAXPAYERS = "growthTaxpayers";
 
-    // Revenue Service Cache Names
-    public static final String CACHE_OFFICE_REVENUE_SUMMARY = "officeRevenueSummary";
-    public static final String CACHE_OFFICE_REVENUE_TREND = "officeRevenueTrend";
-    public static final String CACHE_OFFICE_REVENUE_PERIODS = "officeRevenuePeriods";
-    public static final String CACHE_OFFICE_REVENUE_OFFICES = "officeRevenueOffices";
+	// Defaulter dashboard cache names
+	public static final String CACHE_DEFAULTER_SUMMARY = "defaulterSummary";
+	public static final String CACHE_DEFAULTER_PERIODS = "defaulterPeriods";
+	public static final String CACHE_DEFAULTER_OFFICES = "defaulterOffices";
+	public static final String CACHE_DEFAULTER_HISTORY = "defaulterHistory";
 
-    @Bean
-    public CacheManager cacheManager() {
-        CaffeineCacheManager cacheManager = new CaffeineCacheManager();
-        
-        // Prevent caching null values globally across all cache regions
-        cacheManager.setAllowNullValues(false);
+	// Office revenue service cache names
+	public static final String CACHE_OFFICE_REVENUE_SUMMARY = "officeRevenueSummary";
+	public static final String CACHE_OFFICE_REVENUE_TREND = "officeRevenueTrend";
+	public static final String CACHE_OFFICE_REVENUE_PERIODS = "officeRevenuePeriods";
+	public static final String CACHE_OFFICE_REVENUE_OFFICES = "officeRevenueOffices";
 
-        // ---------------------------------------------------------------------
-        // 1. ANALYTICS & DEFAULTERS CACHES
-        // ---------------------------------------------------------------------
-        cacheManager.registerCustomCache(
-            CACHE_DEFAULTERS_BY_PERIOD,
-            buildCaffeineCache(Duration.ofHours(2), 500)
-        );
+	@Bean
+	public CacheManager cacheManager() {
+		CaffeineCacheManager manager = new CaffeineCacheManager();
 
-        cacheManager.registerCustomCache(
-            CACHE_AUDIT_PIPELINE_BY_PERIOD,
-            buildCaffeineCache(Duration.ofHours(2), 500)
-        );
+		// Must be set BEFORE registering caches. A cached method returning null would
+		// otherwise fail with IllegalArgumentException.
+		manager.setAllowNullValues(false);
 
-        cacheManager.registerCustomCache(
-            CACHE_GST_ANALYTICS,
-            buildCaffeineCache(Duration.ofMinutes(15), 10_000)
-        );
+		// 1. Analytics & defaulters
+		register(manager, CACHE_DEFAULTERS_BY_PERIOD, Duration.ofHours(2), 500);
+		register(manager, CACHE_AUDIT_PIPELINE_BY_PERIOD, Duration.ofHours(2), 500);
+		register(manager, CACHE_GST_ANALYTICS, Duration.ofMinutes(15), 10_000);
+		register(manager, CACHE_GST_ITC_ANALYTICS, Duration.ofHours(4), 1_000);
 
-        cacheManager.registerCustomCache(
-            CACHE_GST_ITC_ANALYTICS,
-            buildCaffeineCache(Duration.ofHours(4), 1_000)
-        );
+		// 2. Growth service (separate instances avoid key collisions between caches)
+		register(manager, CACHE_GROWTH_SUMMARY, Duration.ofMinutes(5), 500);
+		register(manager, CACHE_GROWTH_TREND, Duration.ofMinutes(5), 500);
+		register(manager, CACHE_GROWTH_PERIODS, Duration.ofMinutes(30), 10);
+		register(manager, CACHE_GROWTH_OFFICES, Duration.ofMinutes(60), 200);
+		register(manager, CACHE_GROWTH_TAXPAYERS, Duration.ofMinutes(15), 2_000);
 
-        // ---------------------------------------------------------------------
-        // 2. GROWTH SERVICE CACHES
-        // ---------------------------------------------------------------------
-        // Using distinct cache instances prevents key collisions between summary and trend
-        cacheManager.registerCustomCache(
-            CACHE_GROWTH_SUMMARY,
-            buildCaffeineCache(Duration.ofMinutes(5), 500)
-        );
+		// 3. Defaulter dashboard
+		register(manager, CACHE_DEFAULTER_SUMMARY, Duration.ofMinutes(5), 1_000);
+		register(manager, CACHE_DEFAULTER_PERIODS, Duration.ofMinutes(30), 10);
+		register(manager, CACHE_DEFAULTER_OFFICES, Duration.ofMinutes(15), 200);
+		register(manager, CACHE_DEFAULTER_HISTORY, Duration.ofMinutes(10), 5_000);
 
-        cacheManager.registerCustomCache(
-            CACHE_GROWTH_TREND,
-            buildCaffeineCache(Duration.ofMinutes(5), 500)
-        );
+		// 4. Office revenue service
+		register(manager, CACHE_OFFICE_REVENUE_SUMMARY, Duration.ofMinutes(5), 2_000);
+		register(manager, CACHE_OFFICE_REVENUE_TREND, Duration.ofMinutes(5), 2_000);
+		register(manager, CACHE_OFFICE_REVENUE_PERIODS, Duration.ofMinutes(30), 10);
+		register(manager, CACHE_OFFICE_REVENUE_OFFICES, Duration.ofMinutes(15), 1_000);
 
-        // ---------------------------------------------------------------------
-        // 3. REVENUE SERVICE CACHES
-        // ---------------------------------------------------------------------
-        cacheManager.registerCustomCache(
-            CACHE_OFFICE_REVENUE_SUMMARY,
-            buildCaffeineCache(Duration.ofMinutes(5), 2_000)
-        );
+		// OPTIONAL hardening (disabled): makes an unregistered cache name fail fast instead of
+		// silently creating an unbounded, never-expiring cache. Enable ONLY after confirming that
+		// every @Cacheable/@CacheEvict/@CachePut name in the whole project is registered above,
+		// otherwise those calls fail with "Cannot find cache named ...".
+		// manager.setCacheNames(java.util.List.of());
 
-        cacheManager.registerCustomCache(
-            CACHE_OFFICE_REVENUE_TREND,
-            buildCaffeineCache(Duration.ofMinutes(5), 2_000)
-        );
+		return manager;
+	}
 
-        cacheManager.registerCustomCache(
-            CACHE_OFFICE_REVENUE_PERIODS,
-            buildCaffeineCache(Duration.ofMinutes(30), 10)
-        );
-
-        cacheManager.registerCustomCache(
-            CACHE_OFFICE_REVENUE_OFFICES,
-            buildCaffeineCache(Duration.ofMinutes(15), 1_000)
-        );
-
-        return cacheManager;
-    }
-
-    /**
-     * Helper method to generate Caffeine cache instances with metrics tracking enabled.
-     */
-    private com.github.benmanes.caffeine.cache.Cache<Object, Object> buildCaffeineCache(Duration ttl, long maxSize) {
-        return Caffeine.newBuilder()
-                .expireAfterWrite(ttl)
-                .maximumSize(maxSize)
-                .recordStats() // Required for Spring Boot Actuator metrics monitoring
-                .build();
-    }
+	private static void register(CaffeineCacheManager manager, String name, Duration ttl, long maxSize) {
+		manager.registerCustomCache(name, Caffeine.newBuilder()
+				.expireAfterWrite(ttl)
+				.maximumSize(maxSize)
+				.recordStats() // enables hit/miss metrics via Spring Boot Actuator
+				.build());
+	}
 }

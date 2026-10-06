@@ -4,7 +4,6 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
-import org.springframework.jdbc.core.namedparam.SqlParameterSource;
 import org.springframework.stereotype.Repository;
 import gov.com.ai.webapp.model.revenue.DefaulterDashboardFilter;
 import gov.com.ai.webapp.model.revenue.DefaulterDashboardRow;
@@ -31,6 +30,9 @@ public class DefaulterDashboardRepository {
 	private static final DateTimeFormatter PERIOD_FORMAT = DateTimeFormatter.ofPattern("MMuuuu");
 
 	private final NamedParameterJdbcTemplate jdbc;
+	
+	private static final String JURI_OFFICE_QUERY=" SELECT JURISDICTION_CODE, MERGED_JURISDICTION FROM gst_master_juri_new  "
+			+ " ORDER BY JURISDICTION_CODE ";
 
 	private static final String WHERE = """
 			FROM GST_3B_RETURN_DEFAULTER d
@@ -159,7 +161,7 @@ public class DefaulterDashboardRepository {
 	public List<OptionDto> periods() {
 
 		String sql = " SELECT DISTINCT RET_PERIOD FROM GST_3B_RETURN_DEFAULTER "
-				+ "   WHERE ACTIVE_FLAG = 'Y'  ORDER BY TO_DATE(RET_PERIOD,  'MMYYYY') DESC";
+				+ " ORDER BY TO_DATE(RET_PERIOD,  'MMYYYY') DESC ";
 
 		return jdbc.getJdbcTemplate().query(sql, (rs, rowNum) -> {
 			String value = rs.getString("RET_PERIOD");
@@ -170,15 +172,9 @@ public class DefaulterDashboardRepository {
 
 	public List<OptionDto> offices(String retPeriod) {
 
-		String sql = " SELECT ST_JURI, MAX(OFFICE_NAME) AS OFFICE_NAME "
-				+ " FROM GST_3B_RETURN_DEFAULTER WHERE ACTIVE_FLAG = 'Y' AND RET_PERIOD = :retPeriod AND ST_JURI IS NOT NULL "
-				+ " GROUP BY ST_JURI ORDER BY ST_JURI ";
-
-		SqlParameterSource paramSource = new MapSqlParameterSource("retPeriod", retPeriod);
-
-		return jdbc.query(sql, paramSource, (rs, rowNum) -> {
-			String code = rs.getString("ST_JURI");
-			String officeName = rs.getString("OFFICE_NAME");
+		return jdbc.query(JURI_OFFICE_QUERY,(rs, rowNum) -> {
+			String code = rs.getString("JURISDICTION_CODE");
+			String officeName = rs.getString("MERGED_JURISDICTION");
 
 			return new OptionDto(code, officeName == null || officeName.isBlank() ? code : officeName);
 		});
