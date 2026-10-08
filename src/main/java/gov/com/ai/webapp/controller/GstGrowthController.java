@@ -3,6 +3,7 @@ package gov.com.ai.webapp.controller;
 import gov.com.ai.webapp.model.ReturnPeriodOptionDto;
 import gov.com.ai.webapp.model.dto.*;
 import gov.com.ai.webapp.service.GstGrowthService;
+import gov.com.ai.webapp.util.JwtUtil;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Pattern;
@@ -12,6 +13,8 @@ import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 import java.io.ByteArrayOutputStream;
@@ -32,12 +35,16 @@ public class GstGrowthController {
 	private static final MediaType CSV_MEDIA_TYPE = new MediaType("text", "csv", StandardCharsets.UTF_8);
 
 	private final GstGrowthService service;
+	
+	private final JwtUtil jwtUtil;
 
 	@GetMapping("/periods")
-	public ResponseEntity<List<ReturnPeriodOptionDto>> periods() {
+	public ResponseEntity<List<ReturnPeriodOptionDto>> periods(@AuthenticationPrincipal Jwt jwt) {
 
 		log.info("GET /periods");
-
+		
+		String hrmsCode = jwtUtil.getHrmsCode(jwt);
+        log.info(":::::::"+hrmsCode);
 		return ResponseEntity.ok(service.getPeriods());
 	}
 
