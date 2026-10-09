@@ -202,12 +202,10 @@ public class OfficeRevenueController {
 
 			try {
 				assigned = dashboard.findChargeCdOffices(officeId);
-			} catch (RevenueRequestException ex) {
-				// one malformed id in the assignment data must not break the whole dropdown
+			} catch (RevenueRequestException ex) {				
 				log.warn("Skipping invalid assigned officeId={}: {}", safe(officeId), ex.getMessage());
 				continue;
 			}
-
 			for (OptionDto office : assigned) {
 				if (office != null && office.value() != null) {
 					unique.putIfAbsent(office.value(), office);
