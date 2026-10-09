@@ -13,6 +13,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
+
 import java.io.IOException;
 import java.io.Writer;
 import java.util.List;
@@ -26,16 +27,18 @@ import java.util.regex.Pattern;
  *
  * <p>Caching notes:
  * <ul>
- *   <li>Summary, periods and offices are cached; paged lists and the CSV export are not.</li>
+ *   <li>Summary, periods, offices and charge-code offices are cached; paged lists and the CSV export are not.</li>
  *   <li>Summaries that use free-text {@code search} are never cached (unbounded key space).</li>
  *   <li>Cache keys use normalised values (trimmed, upper-cased enums), so equivalent requests share an entry.</li>
- *   <li>Cached methods never return null (the cache manager rejects null values) and return immutable lists.</li>
+ *   <li>The summary key does NOT contain page/size: the summary does not depend on them.</li>
+ *   <li>Cached methods never return null and return immutable, null-free lists.</li>
  *   <li>Method bodies, and their "loaded" log lines, only run on a cache miss.</li>
  *   <li>Cache names, TTLs and sizes live in {@link CacheConfig}. Call {@link #evictDefaulterCaches()} from
  *       another bean after the batch has refreshed the data.</li>
  * </ul>
  *
- * <p>All validation failures throw {@link DashboardRequestException} (mapped to HTTP 400).
+ * <p>All validation failures throw {@link DashboardRequestException} (mapped to HTTP 400). Infrastructure failures
+ * ({@code DataAccessException}) are left to propagate to the controller advice (mapped to 503/500).
  */
 @Slf4j
 @Service
@@ -44,18 +47,22 @@ public class DefaulterDashboardService {
 
 	public static final String CACHE_SUMMARY = CacheConfig.CACHE_DEFAULTER_SUMMARY;
 	public static final String CACHE_PERIODS = CacheConfig.CACHE_DEFAULTER_PERIODS;
-	public static final String CACHE_OFFICES = CacheConfig.CACHE_DEFAULTER_OFFICES;
+	public static final String CACHE_OFFICES = CacheConfig.CACHE_DEFAULTER_OFFICES;	
+	public static final String CACHE_CHARGE_OFFICES = CacheConfig.CACHE_DEFAULTER_CHARGE_OFFICES;
 
 	private static final Set<String> FILING_STATUSES = Set.of("NOT_DUE", "FILED_ON_TIME", "FILED_LATE", "NOT_FILED");
 	private static final Set<String> DEFAULT_LEVELS = Set.of("NORMAL", "WARNING", "HIGH", "CRITICAL");
 	private static final Set<String> YES_NO = Set.of("Y", "N");
 
 	private static final Pattern PERIOD = Pattern.compile("(0[1-9]|1[0-2])\\d{4}");
+	private static final Pattern CONTROL_CHARS = Pattern.compile("\\p{Cntrl}");
 
+	private static final int MAX_PAGE = 100_000; // keeps page * size far away from int overflow / absurd OFFSETs
 	private static final int MAX_PAGE_SIZE = 100;
 	private static final int MAX_RISK_LENGTH = 30;
 	private static final int MAX_OFFICE_LENGTH = 100;
 	private static final int MAX_SEARCH_LENGTH = 100;
+	private static final int MAX_LOG_VALUE = 120;
 	private static final long SLOW_MS = 2_000;
 
 	private final DefaulterDashboardRepository repository;
@@ -69,8 +76,7 @@ public class DefaulterDashboardService {
 		long started = System.nanoTime();
 		DefaulterDashboardFilter v = validate(filter, false);
 
-		DefaulterDashboardSummary response = Objects.requireNonNull(repository.summary(v),
-				"repository.summary returned null");
+		DefaulterDashboardSummary response = requireResult(repository.summary(v), "summary");
 
 		logLoaded("summary", started, "period=" + v.retPeriod() + " office=" + safe(v.office()) + " filingStatus="
 				+ v.filingStatus() + " defaultLevel=" + v.defaultLevel() + " search=" + (v.search() != null)
@@ -85,8 +91,7 @@ public class DefaulterDashboardService {
 		long started = System.nanoTime();
 		DefaulterDashboardFilter v = validate(filter, false);
 
-		PageResponse<DefaulterDashboardRow> response = Objects.requireNonNull(repository.page(v),
-				"repository.page returned null");
+		PageResponse<DefaulterDashboardRow> response = requireResult(repository.page(v), "page");
 
 		int rows = response.content() == null ? 0 : response.content().size();
 
@@ -101,10 +106,10 @@ public class DefaulterDashboardService {
 	public List<OptionDto> periods() {
 
 		long started = System.nanoTime();
-		List<OptionDto> r = repository.periods();
-		logLoaded("periods", started, "");
+		List<OptionDto> r = immutable(repository.periods());
+		logLoaded("periods", started, "count=" + r.size());
 
-		return r == null ? List.of() : List.copyOf(r);
+		return r;
 	}
 
 	@Cacheable(cacheNames = CACHE_OFFICES, key = "#root.target.periodKey(#p0)", sync = true)
@@ -113,10 +118,33 @@ public class DefaulterDashboardService {
 		long started = System.nanoTime();
 		String period = validatePeriod(retPeriod);
 
-		List<OptionDto> r = repository.offices(period);
-		logLoaded("offices", started, "period=" + period);
+		List<OptionDto> r = immutable(repository.offices(period));
+		logLoaded("offices", started, "period=" + period + " count=" + r.size());
 
-		return r == null ? List.of() : List.copyOf(r);
+		return r;
+	}
+
+	/**
+	 * Offices under one assigned office id (charge code). Cached per office id, so a user with many assigned
+	 * offices hits the database only for ids nobody has asked for recently. Master data: not evicted by the batch.
+	 */
+	@Cacheable(cacheNames = CACHE_CHARGE_OFFICES, key = "#root.target.officeKey(#p0)", sync = true)
+	public List<OptionDto> findChargeCdOffices(String officeId) {
+
+		long started = System.nanoTime();
+		String id = clean(officeId);
+
+		if (id == null) {
+			throw bad("officeId is required");
+		}
+		if (id.length() > MAX_OFFICE_LENGTH) {
+			throw bad("officeId exceeds " + MAX_OFFICE_LENGTH + " characters");
+		}
+
+		List<OptionDto> r = immutable(repository.findChargeCdOffices(id));
+		logLoaded("chargeOffices", started, "officeId=" + safe(id) + " count=" + r.size());
+
+		return r;
 	}
 
 	// ----------------------------------------------------------------- export
@@ -135,6 +163,7 @@ public class DefaulterDashboardService {
 			throw new DashboardRequestException("CSV writer is required");
 		}
 
+		// idempotent: already-validated filters pass through unchanged
 		DefaulterDashboardFilter v = validate(filter, true);
 		long started = System.nanoTime();
 
@@ -167,8 +196,7 @@ public class DefaulterDashboardService {
 			return "NULL";
 		}
 		return String.join("|", keyPart(f.retPeriod()), keyPart(f.office()), keyPart(upper(f.filingStatus())),
-				keyPart(upper(f.riskLevel())), keyPart(upper(f.defaultLevel())), keyPart(upper(f.gstr3aEligible())),
-				Integer.toString(Math.max(f.page(), 0)), Integer.toString(clamp(f.size(), 1, MAX_PAGE_SIZE)));
+				keyPart(upper(f.riskLevel())), keyPart(upper(f.defaultLevel())), keyPart(upper(f.gstr3aEligible())));
 	}
 
 	/** Only filters without free-text search are cached. */
@@ -178,6 +206,10 @@ public class DefaulterDashboardService {
 
 	public String periodKey(String retPeriod) {
 		return keyPart(retPeriod);
+	}
+
+	public String officeKey(String officeId) {
+		return keyPart(officeId);
 	}
 
 	// ------------------------------------------------------------- validation
@@ -191,7 +223,7 @@ public class DefaulterDashboardService {
 		String period = validatePeriod(filter.retPeriod());
 
 		// export streams every row; the repository must not apply paging to it
-		int page = export ? 0 : Math.max(filter.page(), 0);
+		int page = export ? 0 : clamp(filter.page(), 0, MAX_PAGE);
 		int size = export ? Integer.MAX_VALUE : clamp(filter.size(), 1, MAX_PAGE_SIZE);
 
 		String office = clean(filter.office());
@@ -228,7 +260,7 @@ public class DefaulterDashboardService {
 				search, page, size);
 	}
 
-	/** Returns the trimmed period (the old version validated the trimmed value but passed the raw one on). */
+	/** Returns the trimmed period. */
 	private String validatePeriod(String retPeriod) {
 
 		String p = clean(retPeriod);
@@ -246,6 +278,19 @@ public class DefaulterDashboardService {
 	}
 
 	// ---------------------------------------------------------------- helpers
+
+	/** A null from the repository is a programming/data error (500), not a client error. */
+	private static <T> T requireResult(T value, String op) {
+		if (value == null) {
+			throw new IllegalStateException("Defaulter dashboard repository returned null for " + op);
+		}
+		return value;
+	}
+
+	/** Immutable copy that tolerates null lists AND null elements (List.copyOf rejects both). */
+	private static List<OptionDto> immutable(List<OptionDto> source) {
+		return source == null ? List.of() : source.stream().filter(Objects::nonNull).toList();
+	}
 
 	private static String clean(String value) {
 
@@ -283,23 +328,24 @@ public class DefaulterDashboardService {
 			return null;
 		}
 
-		String c = value.replaceAll("\\p{Cntrl}", "_");
+		String c = CONTROL_CHARS.matcher(value).replaceAll("_");
 
-		return c.length() > 120 ? c.substring(0, 120) + "..." : c;
+		return c.length() > MAX_LOG_VALUE ? c.substring(0, MAX_LOG_VALUE) + "..." : c;
 	}
 
 	private static long ms(long startNanos) {
 		return (System.nanoTime() - startNanos) / 1_000_000;
 	}
 
+	/** INFO on every cache miss is noisy at scale: DEBUG normally, WARN when slow. */
 	private static void logLoaded(String op, long startNanos, String ctx) {
 
 		long elapsed = ms(startNanos);
 
 		if (elapsed >= SLOW_MS) {
 			log.warn("Defaulter dashboard {} loaded SLOW elapsedMs={} {}", op, elapsed, ctx);
-		} else {
-			log.info("Defaulter dashboard {} loaded elapsedMs={} {}", op, elapsed, ctx);
+		} else if (log.isDebugEnabled()) {
+			log.debug("Defaulter dashboard {} loaded elapsedMs={} {}", op, elapsed, ctx);
 		}
 	}
 }

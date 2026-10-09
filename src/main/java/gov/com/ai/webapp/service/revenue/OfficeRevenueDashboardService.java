@@ -14,7 +14,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
-
 import java.io.BufferedWriter;
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -33,10 +32,18 @@ import java.util.regex.Pattern;
  * <ul>
  *   <li>Cache keys are built from <b>normalised</b> values, so {@code office=""}, {@code office=null} and
  *       {@code growthStatus=high} / {@code HIGH} share one entry.</li>
+ *   <li>The summary key does NOT contain page/size: the summary does not depend on them.</li>
  *   <li>Summaries that use free-text {@code search} are never cached (unbounded key space).</li>
- *   <li>Cached methods never return null (the cache manager rejects null values) and return immutable lists.</li>
+ *   <li>Cached methods never return null (the cache manager rejects null values) and return immutable,
+ *       null-free lists.</li>
  *   <li>Cache names, TTLs and sizes are defined once in {@link CacheConfig}.</li>
+ *   <li>{@link #CACHE_CHARGE_OFFICES} is deliberately the same cache as the defaulter dashboard's, with the same
+ *       key format: both resolve the same master data, so one entry serves both. If the two repositories ever
+ *       return different data for an office id, give this service its own cache name.</li>
  * </ul>
+ *
+ * <p>All validation failures throw {@link RevenueRequestException} (mapped to HTTP 400). Infrastructure failures
+ * ({@code DataAccessException}) propagate to the controller advice.
  */
 @Slf4j
 @Service
@@ -47,6 +54,7 @@ public class OfficeRevenueDashboardService {
 	public static final String CACHE_TREND = CacheConfig.CACHE_OFFICE_REVENUE_TREND;
 	public static final String CACHE_PERIODS = CacheConfig.CACHE_OFFICE_REVENUE_PERIODS;
 	public static final String CACHE_OFFICES = CacheConfig.CACHE_OFFICE_REVENUE_OFFICES;
+	public static final String CACHE_CHARGE_OFFICES = CacheConfig.CACHE_DEFAULTER_CHARGE_OFFICES;
 
 	/**
 	 * Single source of truth for the growth-status filter. The controller regex must list the same values,
@@ -56,10 +64,14 @@ public class OfficeRevenueDashboardService {
 			"NO_BASE");
 
 	private static final Pattern PERIOD = Pattern.compile("(0[1-9]|1[0-2])20\\d{2}");
+	private static final Pattern CONTROL_CHARS = Pattern.compile("\\p{Cntrl}");
+
 	private static final int MAX_SEARCH = 100;
 	private static final int MAX_OFFICE = 100; // keep equal to @Size(max) in the controller
+	private static final int MAX_PAGE = 100_000; // keeps page * size away from int overflow / absurd OFFSETs
 	private static final int MAX_PAGE_SIZE = 100;
 	private static final int MAX_MONTHS = 36;
+	private static final int MAX_LOG_VALUE = 120;
 	private static final long SLOW_MS = 2_000;
 	private static final String CRLF = "\r\n";
 	private static final String CSV_HEADER = "Return Period,Office Code,Office Name,Filed GSTINs,Taxable Value,"
@@ -76,8 +88,8 @@ public class OfficeRevenueDashboardService {
 	public OfficeRevenueDashboardResponse summary(RevenueDashboardFilter f) {
 		long t0 = System.nanoTime();
 		RevenueDashboardFilter v = valid(f);
-		OfficeRevenueDashboardResponse r = Objects.requireNonNull(repo.summary(v), "repo.summary returned null");
-		logLoaded("summary", t0, "period=" + v.retPeriod() + " office=" + v.office() + " growth="
+		OfficeRevenueDashboardResponse r = requireResult(repo.summary(v), "summary");
+		logLoaded("summary", t0, "period=" + v.retPeriod() + " office=" + safe(v.office()) + " growth="
 				+ v.growthStatus() + " search=" + (v.search() != null));
 		return r;
 	}
@@ -86,9 +98,9 @@ public class OfficeRevenueDashboardService {
 	public PageResponse<OfficeRevenueRowResponse> page(RevenueDashboardFilter f) {
 		long t0 = System.nanoTime();
 		RevenueDashboardFilter v = valid(f);
-		PageResponse<OfficeRevenueRowResponse> r = repo.page(v);
-		logLoaded("page", t0, "period=" + v.retPeriod() + " office=" + v.office() + " growth=" + v.growthStatus()
-				+ " search=" + (v.search() != null) + " page=" + v.page() + " size=" + v.size());
+		PageResponse<OfficeRevenueRowResponse> r = requireResult(repo.page(v), "page");
+		logLoaded("page", t0, "period=" + v.retPeriod() + " office=" + safe(v.office()) + " growth="
+				+ v.growthStatus() + " search=" + (v.search() != null) + " page=" + v.page() + " size=" + v.size());
 		return r;
 	}
 
@@ -98,26 +110,50 @@ public class OfficeRevenueDashboardService {
 		String period = period(p);
 		String office = office(o);
 		int months = clamp(m, 1, MAX_MONTHS);
-		List<OfficeRevenueTrendResponse> r = repo.trend(period, office, months);
-		logLoaded("trend", t0, "period=" + period + " office=" + office + " months=" + months);
-		return r == null ? List.of() : List.copyOf(r);
+		List<OfficeRevenueTrendResponse> r = immutable(repo.trend(period, office, months));
+		logLoaded("trend", t0, "period=" + period + " office=" + safe(office) + " months=" + months + " points="
+				+ r.size());
+		return r;
 	}
 
 	@Cacheable(cacheNames = CACHE_PERIODS, key = "'ALL'", sync = true)
 	public List<OptionDto> periods() {
 		long t0 = System.nanoTime();
-		List<OptionDto> r = repo.periods();
-		logLoaded("periods", t0, "");
-		return r == null ? List.of() : List.copyOf(r);
+		List<OptionDto> r = immutable(repo.periods());
+		logLoaded("periods", t0, "count=" + r.size());
+		return r;
 	}
 
 	@Cacheable(cacheNames = CACHE_OFFICES, key = "#root.target.periodKey(#p0)", sync = true)
 	public List<OptionDto> offices(String p) {
 		long t0 = System.nanoTime();
 		String period = period(p);
-		List<OptionDto> r = repo.offices(period);
-		logLoaded("offices", t0, "period=" + period);
-		return r == null ? List.of() : List.copyOf(r);
+		List<OptionDto> r = immutable(repo.offices(period));
+		logLoaded("offices", t0, "period=" + period + " count=" + r.size());
+		return r;
+	}
+
+	/**
+	 * Offices under one assigned office id (charge code). Cached per office id, so a user with many assigned
+	 * offices hits the database only for ids nobody has asked for recently. Master data: not evicted by the batch.
+	 */
+	@Cacheable(cacheNames = CACHE_CHARGE_OFFICES, key = "#root.target.officeKey(#p0)", sync = true)
+	public List<OptionDto> findChargeCdOffices(String officeId) {
+
+		long t0 = System.nanoTime();
+		String id = norm(officeId);
+
+		if (id == null) {
+			throw bad("officeId is required");
+		}
+		if (id.length() > MAX_OFFICE) {
+			throw bad("officeId max length is " + MAX_OFFICE);
+		}
+
+		List<OptionDto> r = immutable(repo.findChargeCdOffices(id));
+		logLoaded("chargeOffices", t0, "officeId=" + safe(id) + " count=" + r.size());
+
+		return r;
 	}
 
 	// ----------------------------------------------------------------- export
@@ -131,11 +167,18 @@ public class OfficeRevenueDashboardService {
 	}
 
 	public void export(RevenueDashboardFilter f, BufferedWriter w) throws IOException {
+		if (w == null) {
+			throw bad("CSV writer is required");
+		}
+
+		// idempotent: an already-validated filter passes through unchanged
 		RevenueDashboardFilter v = valid(f);
 		long t0 = System.nanoTime();
 		AtomicLong rows = new AtomicLong();
+
 		w.write(CSV_HEADER);
 		w.write(CRLF);
+
 		try {
 			repo.streamExport(v, r -> {
 				try {
@@ -156,10 +199,15 @@ public class OfficeRevenueDashboardService {
 			log.warn("Export stopped after rows={} period={} cause={}", rows.get(), v.retPeriod(),
 					e.getCause().toString());
 			throw e.getCause();
+		} catch (RuntimeException e) {
+			// the response is already committed: the client sees a truncated file, so make the cause findable
+			log.error("Export FAILED after rows={} period={} elapsedMs={}", rows.get(), v.retPeriod(), ms(t0), e);
+			throw e;
 		}
+
 		w.flush();
 		log.info("Export rows={} period={} office={} growth={} search={} elapsedMs={}", rows.get(), v.retPeriod(),
-				v.office(), v.growthStatus(), v.search() != null, ms(t0));
+				safe(v.office()), v.growthStatus(), v.search() != null, ms(t0));
 	}
 
 	// ------------------------------------------------------------------ cache
@@ -180,8 +228,7 @@ public class OfficeRevenueDashboardService {
 		if (f == null) {
 			return "NULL";
 		}
-		return String.join("|", keyPart(f.retPeriod()), keyPart(f.office()), keyPart(upper(f.growthStatus())),
-				Integer.toString(Math.max(f.page(), 0)), Integer.toString(clamp(f.size(), 1, MAX_PAGE_SIZE)));
+		return String.join("|", keyPart(f.retPeriod()), keyPart(f.office()), keyPart(upper(f.growthStatus())));
 	}
 
 	/** Only filters without free-text search are cached. */
@@ -197,6 +244,10 @@ public class OfficeRevenueDashboardService {
 		return keyPart(p);
 	}
 
+	public String officeKey(String officeId) {
+		return keyPart(officeId);
+	}
+
 	// ------------------------------------------------------------- validation
 
 	private RevenueDashboardFilter valid(RevenueDashboardFilter f) {
@@ -204,7 +255,7 @@ public class OfficeRevenueDashboardService {
 			throw bad("Filter required");
 		}
 		return new RevenueDashboardFilter(period(f.retPeriod()), office(f.office()), growth(f.growthStatus()),
-				search(f.search()), Math.max(f.page(), 0), clamp(f.size(), 1, MAX_PAGE_SIZE));
+				search(f.search()), clamp(f.page(), 0, MAX_PAGE), clamp(f.size(), 1, MAX_PAGE_SIZE));
 	}
 
 	private String period(String p) {
@@ -246,6 +297,19 @@ public class OfficeRevenueDashboardService {
 
 	// ---------------------------------------------------------------- helpers
 
+	/** A null from the repository is a programming/data error (500), not a client error. */
+	private static <T> T requireResult(T value, String op) {
+		if (value == null) {
+			throw new IllegalStateException("Office revenue repository returned null for " + op);
+		}
+		return value;
+	}
+
+	/** Immutable copy that tolerates null lists AND null elements (List.copyOf rejects both). */
+	private static <T> List<T> immutable(List<T> source) {
+		return source == null ? List.of() : source.stream().filter(Objects::nonNull).toList();
+	}
+
 	private static String norm(String s) {
 		if (s == null) {
 			return null;
@@ -268,6 +332,15 @@ public class OfficeRevenueDashboardService {
 		return Math.min(Math.max(v, min), max);
 	}
 
+	/** Strips control characters (no forged log lines) and truncates long values. */
+	private static String safe(String value) {
+		if (value == null) {
+			return null;
+		}
+		String c = CONTROL_CHARS.matcher(value).replaceAll("_");
+		return c.length() > MAX_LOG_VALUE ? c.substring(0, MAX_LOG_VALUE) + "..." : c;
+	}
+
 	private static long ms(long startNanos) {
 		return (System.nanoTime() - startNanos) / 1_000_000;
 	}
@@ -276,7 +349,7 @@ public class OfficeRevenueDashboardService {
 		long elapsed = ms(startNanos);
 		if (elapsed >= SLOW_MS) {
 			log.warn("Office revenue {} loaded SLOW elapsedMs={} {}", op, elapsed, ctx);
-		} else {
+		} else if (log.isDebugEnabled()) {
 			log.debug("Office revenue {} loaded elapsedMs={} {}", op, elapsed, ctx);
 		}
 	}

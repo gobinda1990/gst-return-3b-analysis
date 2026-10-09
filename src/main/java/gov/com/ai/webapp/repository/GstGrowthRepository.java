@@ -35,6 +35,9 @@ public class GstGrowthRepository {
 	private static final String JURI_OFFICE_QUERY=" SELECT JURISDICTION_CODE, MERGED_JURISDICTION FROM gst_master_juri_new  "
 			+ " ORDER BY JURISDICTION_CODE ";
 	
+	private final String JURI_QUERY="SELECT JURISDICTION_CODE, MERGED_JURISDICTION FROM gst_master_juri_new  "
+			+ " where charge_cd_vat=? ";
+	
 	
 
 	// ======== COMMON JOINS Risk profile MUST join on GSTIN + RET_PERIOD.
@@ -92,6 +95,28 @@ public class GstGrowthRepository {
 		    throw new GrowthDataAccessException("Failed to load offices", ex);
 		}
 	}
+	
+	public List<OfficeOptionResponse> findChargeCdOffices(String officeId) {
+
+		long start = System.currentTimeMillis();
+		try {
+		    List<OfficeOptionResponse> result = jdbcTemplate.query(
+		    		JURI_QUERY,
+		        (rs, rowNum) -> OfficeOptionResponse.builder()
+		                .value(rs.getString("JURISDICTION_CODE"))
+		                .label(rs.getString("MERGED_JURISDICTION"))
+		                .build(),officeId); 
+
+		    log.debug("Loaded growth offices period={} count={} durationMs={}", officeId, result.size(), elapsed(start));
+		    return result;
+
+		} catch (DataAccessException ex) {
+		    log.error("Failed loading growth offices period={}", officeId, ex);
+		    throw new GrowthDataAccessException("Failed to load offices", ex);
+		}
+	}
+	
+	
 
 	/*
 	 * ======================================================== DETAIL PAGE

@@ -65,6 +65,16 @@ public class GstGrowthService {
 
 		return result == null ? List.of() : List.copyOf(result);
 	}
+	
+	@Cacheable(cacheNames = CacheConfig.CACHE_GROWTH_OFFICES, key = "T(gov.com.ai.webapp.config.GrowthCacheKeys).scope(#period, null)", unless = "#result == null || #result.isEmpty()")
+	public List<OfficeOptionResponse> findChargeCdOffices(String officeId) {		
+
+		log.debug("Cache MISS: fetching GST growth offices period={}", officeId);
+
+		List<OfficeOptionResponse> result = repository.findChargeCdOffices(officeId);
+
+		return result == null ? List.of() : List.copyOf(result);
+	}
 
 	@Cacheable(cacheNames = CacheConfig.CACHE_GROWTH_SUMMARY, key = "T(gov.com.ai.webapp.config.GrowthCacheKeys).scope(#period, #office)", unless = "#result == null")
 	public GrowthSummaryResponse getSummary(String period, String office) {

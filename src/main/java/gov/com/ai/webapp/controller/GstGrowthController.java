@@ -2,6 +2,7 @@ package gov.com.ai.webapp.controller;
 
 import gov.com.ai.webapp.model.ReturnPeriodOptionDto;
 import gov.com.ai.webapp.model.dto.*;
+import gov.com.ai.webapp.repository.CommonUserRepo;
 import gov.com.ai.webapp.service.GstGrowthService;
 import gov.com.ai.webapp.util.JwtUtil;
 import jakarta.validation.constraints.Max;
@@ -17,11 +18,22 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
+
+import com.fasterxml.jackson.databind.JsonNode;
+
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
+import java.util.stream.Stream;
+import java.util.stream.StreamSupport;
 
 @Slf4j
 @Validated
@@ -35,26 +47,98 @@ public class GstGrowthController {
 	private static final MediaType CSV_MEDIA_TYPE = new MediaType("text", "csv", StandardCharsets.UTF_8);
 
 	private final GstGrowthService service;
-	
+
+	private final CommonUserRepo commonUserRepo;
+
 	private final JwtUtil jwtUtil;
 
 	@GetMapping("/periods")
 	public ResponseEntity<List<ReturnPeriodOptionDto>> periods(@AuthenticationPrincipal Jwt jwt) {
 
 		log.info("GET /periods");
-		
-		String hrmsCode = jwtUtil.getHrmsCode(jwt);
-        log.info(":::::::"+hrmsCode);
+
 		return ResponseEntity.ok(service.getPeriods());
 	}
 
 	@GetMapping("/offices")
-	public ResponseEntity<List<OfficeOptionResponse>> offices(
+	public ResponseEntity<List<OfficeOptionResponse>> offices(@AuthenticationPrincipal Jwt jwt,
 			@RequestParam @Pattern(regexp = PERIOD_PATTERN, message = "period must be MMYYYY") String period) {
 
-		log.debug("GET /offices period={}", period);
+//		if (jwt == null) {
+//			throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authentication required");
+//		}
 
-		return ResponseEntity.ok(service.getOffices(period));
+		String hrmsCode = jwtUtil.getHrmsCode(jwt);
+
+		List<String> roles = jwtUtil.extractRoles(jwt);
+
+		String role = (roles != null && !roles.isEmpty()) ? roles.get(0) : null;
+		
+
+		String normalizedRole = role == null ? "" : role.trim().toUpperCase(Locale.ROOT).replaceFirst("^ROLE_", "");
+
+		log.info("Fetching growth offices period={}, role={}", period,
+				normalizedRole.isEmpty() ? "NULL" : normalizedRole);
+
+		// SUPER ADMIN: All offices
+		// Null role: legacy Super Admin rule
+		if (normalizedRole.isEmpty() || "SUPER ADMIN".equals(normalizedRole)) {
+
+			return ResponseEntity.ok(service.getOffices(period));
+		}
+
+		// Only ADMIN and USER can use assigned-office access
+//		if (!"ADMIN".equals(normalizedRole) && !"USER".equals(normalizedRole)) {
+//			throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Unsupported user role");
+//		}
+//
+//		if (hrmsCode == null || hrmsCode.isBlank()) {
+//			throw new ResponseStatusException(HttpStatus.FORBIDDEN, "HRMS code not available");
+//		}
+
+		List<JsonNode> results = commonUserRepo.fetchAssignedOffices(hrmsCode);
+
+		if (results == null || results.isEmpty()) {
+			return ResponseEntity.ok(Collections.emptyList());
+		}
+
+		List<String> officeIds = results.stream().filter(Objects::nonNull).flatMap(node -> {
+			JsonNode offices = node.path("offices");
+
+			if (!offices.isArray()) {
+				return Stream.<JsonNode>empty();
+			}
+
+			return StreamSupport.stream(offices.spliterator(), false);
+		}).map(office -> office.path("officeId").asText("").trim()).filter(id -> !id.isBlank()).distinct().toList();
+
+		if (officeIds.isEmpty()) {
+			return ResponseEntity.ok(Collections.emptyList());
+		}
+
+		// Fetch office options for all assigned offices
+		Map<String, OfficeOptionResponse> uniqueOffices = new LinkedHashMap<>();
+
+		for (String officeId : officeIds) {
+
+			List<OfficeOptionResponse> assignedOffices = service.findChargeCdOffices(officeId);
+
+			if (assignedOffices == null) {
+				continue;
+			}
+
+			for (OfficeOptionResponse office : assignedOffices) {
+				if (office == null || office.getValue() == null) {
+					continue;
+				}
+
+				uniqueOffices.putIfAbsent(office.getValue(), office);
+			}
+		}
+
+		log.debug("Growth offices resolved count={}", uniqueOffices.size());
+
+		return ResponseEntity.ok(new ArrayList<>(uniqueOffices.values()));
 	}
 
 	@GetMapping("/summary")

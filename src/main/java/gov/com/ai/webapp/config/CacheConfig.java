@@ -30,6 +30,7 @@ public class CacheConfig {
 	public static final String CACHE_DEFAULTER_PERIODS = "defaulterPeriods";
 	public static final String CACHE_DEFAULTER_OFFICES = "defaulterOffices";
 	public static final String CACHE_DEFAULTER_HISTORY = "defaulterHistory";
+	public static final String CACHE_DEFAULTER_CHARGE_OFFICES = "defaulterChargeOffices";
 
 	// Office revenue service cache names
 	public static final String CACHE_OFFICE_REVENUE_SUMMARY = "officeRevenueSummary";
@@ -63,6 +64,8 @@ public class CacheConfig {
 		register(manager, CACHE_DEFAULTER_PERIODS, Duration.ofMinutes(30), 10);
 		register(manager, CACHE_DEFAULTER_OFFICES, Duration.ofMinutes(15), 200);
 		register(manager, CACHE_DEFAULTER_HISTORY, Duration.ofMinutes(10), 5_000);
+		register(manager, CACHE_DEFAULTER_CHARGE_OFFICES, Duration.ofMinutes(15), 200);
+		
 
 		// 4. Office revenue service
 		register(manager, CACHE_OFFICE_REVENUE_SUMMARY, Duration.ofMinutes(5), 2_000);
