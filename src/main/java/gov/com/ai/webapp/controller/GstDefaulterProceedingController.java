@@ -93,11 +93,19 @@ public class GstDefaulterProceedingController {
 		return ResponseEntity.ok(section62EligibilityService.scan());
 	}
 
-//	@PostMapping("/asmt13")
-//	public ResponseEntity<?> issueAsmt13(@AuthenticationPrincipal Jwt jwt,
-//			@Valid @RequestBody IssueAsmt13Request request) {
-//		return ResponseEntity.ok(assessmentService.issue(request, requireHrmsCode(jwt)));
-//	}
+	@PostMapping("/asmt13")
+	public ResponseEntity<?> issueAsmt13(@AuthenticationPrincipal Jwt jwt,
+			@Valid @RequestBody IssueAsmt13Request request) {
+		String hrmsCode = requireHrmsCode(jwt);
+
+		List<String> officeIds = authorizationService.resolveOfficeIds(hrmsCode);
+
+		if (officeIds.isEmpty()) {
+			log.warn("GSTR-3A issuance denied: no offices assigned hrms={}", hrmsCode);
+			throw new ResponseStatusException(HttpStatus.FORBIDDEN, "No offices assigned to the officer");
+		}
+		return ResponseEntity.ok(assessmentService.issue(request, hrmsCode,officeIds));
+	}
 
 	@PostMapping("/{proceedingId}/reconcile")
 	public ResponseEntity<?> reconcile(@AuthenticationPrincipal Jwt jwt, @PathVariable @Min(1) Long proceedingId) {
