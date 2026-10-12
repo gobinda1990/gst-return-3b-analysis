@@ -1,6 +1,7 @@
 package gov.com.ai.webapp.controller;
 
 import gov.com.ai.webapp.model.dto.defaulter.*;
+import gov.com.ai.webapp.model.revenue.OptionDto;
 import gov.com.ai.webapp.service.defaulter.DefaulterProceedingQueryService;
 import gov.com.ai.webapp.service.defaulter.Gstr3aNoticeService;
 import gov.com.ai.webapp.service.defaulter.JurisdictionAuthorizationService;
@@ -42,6 +43,12 @@ public class GstDefaulterProceedingController {
 	private final JwtUtil jwtUtil;
 
 	/* ------------------------------- QUERIES -------------------------------- */
+	
+	
+	@GetMapping("/periods")
+	public ResponseEntity<List<OptionDto>> periods() {
+		return ResponseEntity.ok(gstr3aNoticeService.periods());
+	}
 
 	@GetMapping("/summary")
 	public ResponseEntity<ProceedingSummaryResponse> summary(

@@ -4,9 +4,12 @@ import gov.com.ai.webapp.config.GstLegalConstants;
 import gov.com.ai.webapp.exception.IllegalProceedingStateException;
 import gov.com.ai.webapp.model.dto.defaulter.Gstr3aResponse;
 import gov.com.ai.webapp.model.dto.defaulter.IssueGstr3aRequest;
+import gov.com.ai.webapp.model.revenue.OptionDto;
 import gov.com.ai.webapp.repository.Gstr3bFilingRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -42,6 +45,7 @@ public class Gstr3aNoticeService {
 	private final NoticeReferenceGenerator referenceGenerator;
 	private final DefaulterAuditService auditService;
 	private final Clock clock;
+	private final Gstr3bFilingRepository gstr3bFilingRepository;
 
 	/**
 	 * Issues a GSTR-3A notice.
@@ -50,6 +54,15 @@ public class Gstr3aNoticeService {
 	 * @param hrmsCode HRMS code of the authenticated officer (audit trail)
 	 * @param officeIds office IDs assigned to the officer (jurisdiction check)
 	 */
+	
+	
+	public List<OptionDto> periods() {
+
+		long started = System.nanoTime();
+		List<OptionDto> r = gstr3bFilingRepository.periods();	
+
+		return r;
+	}
 	@Transactional
 	public Gstr3aResponse issue(IssueGstr3aRequest request, String hrmsCode, List<String> officeIds) {
 
@@ -72,9 +85,6 @@ public class Gstr3aNoticeService {
 					eligibility.reason());
 			throw new IllegalProceedingStateException("GSTR-3A cannot be issued: " + eligibility.reason());
 		}
-
-		// STEP 3: create the proceeding if absent (nullable params bound with explicit
-		// JDBC types to avoid ORA-17004).
 		Long proceedingId = createOrGet(gstin, period, eligibility, jurisdiction.stJuri(),
 				jurisdiction.officeCode(), officerCode);
 
