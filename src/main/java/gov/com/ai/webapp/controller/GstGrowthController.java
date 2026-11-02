@@ -183,31 +183,8 @@ public class GstGrowthController {
 
 		return ResponseEntity.ok(service.getTaxpayers(period, office, search, trend, riskLevel, page, size));
 	}
-
-	/*
-	 * FIX: previously ResponseEntity.ok() committed the 200 status immediately, and
-	 * the actual validation + query only ran once the StreamingResponseBody lambda
-	 * executed — by which point the status code can no longer be changed. An
-	 * invalid period, or a DB failure mid-export, silently produced a truncated
-	 * "successful" CSV with nothing in the logs.
-	 *
-	 * The @Pattern below now rejects a malformed period with a proper 400 (via
-	 * GstGrowthExceptionHandler) *before* this method body — and therefore before
-	 * the streaming response — ever starts. That covers the most common failure. A
-	 * genuine failure that only surfaces once streaming has begun (e.g. the DB
-	 * going away mid-export) still can't change the HTTP status once bytes have
-	 * been sent — no code can fix that after the fact — but it's now caught, logged
-	 * with full context, and rethrown so the connection aborts cleanly instead of
-	 * failing silently.
-	 */
-	/**
-	 * Export GST 3B growth analytics as CSV.
-	 *
-	 * Example:
-	 *
-	 * GET /gst/return-3b/growth/export ?period=062026 &office=KOLKATA
-	 * &trend=STRONG_DECLINE &riskLevel=HIGH
-	 */
+	
+	//GET /gst/return-3b/growth/export ?period=062026 &office=KOLKATA	 
 	@GetMapping(value = "/export", produces = "text/csv")
 	public ResponseEntity<byte[]> export(
 			@RequestParam @Pattern(regexp = PERIOD_PATTERN, message = "period must be MMYYYY") String period,

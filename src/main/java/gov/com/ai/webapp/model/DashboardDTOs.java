@@ -15,6 +15,7 @@ public class DashboardDTOs {
 	@NoArgsConstructor
 	@AllArgsConstructor
 	public static class GstinAnalysisResponse {
+		
 	    private String gstin;
 	    private String legalName;
 	    private String tradeName;

@@ -22,7 +22,7 @@ public class GstJurisdictionRepository {
 	private final String JURI_QUERY = "SELECT a.st_juri, b.merged_jurisdiction AS office_code, "
 			+ "b.charge_cd_vat AS office_name FROM GST_DEALER_MASTER_WBCOMTAX a "
 			+ "JOIN gst_master_juri_new b ON a.st_juri = b.jurisdiction_code "
-			+ "WHERE a.gstin = ? AND a.auth_status = 'A'";
+			+ "WHERE a.gstin = ? ";
 	
 	// Notice the clean :offices named parameter syntax for lists
 	private final String JURI_QUERY_OFFICER = "SELECT JURISDICTION_CODE, merged_juri_code FROM gst_master_juri_new WHERE charge_cd_vat IN (:offices)";
