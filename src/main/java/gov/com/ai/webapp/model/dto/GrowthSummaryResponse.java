@@ -13,24 +13,19 @@ import java.math.BigDecimal;
 public class GrowthSummaryResponse {
 
 	private long totalGstins;
-
 	private BigDecimal totalTaxableValue;
 	private BigDecimal totalOutputTax;
 	private BigDecimal totalEligibleItc;
 	private BigDecimal totalCashTaxPaid;
-
 	private BigDecimal avgMomTaxableGrowth;
 	private BigDecimal avgMomOutputTaxGrowth;
-
 	private BigDecimal avgYoyTaxableGrowth;
 	private BigDecimal avgYoyOutputTaxGrowth;
-
 	private long strongGrowthCount;
 	private long growthCount;
 	private long stableCount;
 	private long declineCount;
 	private long strongDeclineCount;
-
 	private long highRiskCount;
 	private long mediumRiskCount;
 	private long lowRiskCount;

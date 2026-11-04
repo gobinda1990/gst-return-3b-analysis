@@ -8,12 +8,9 @@ import gov.com.ai.webapp.model.revenue.OptionDto;
 import gov.com.ai.webapp.repository.Gstr3bFilingRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-
-import org.springframework.cache.annotation.Cacheable;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-
 import java.sql.Date;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
@@ -58,7 +55,7 @@ public class Gstr3aNoticeService {
 	
 	public List<OptionDto> periods() {
 
-		long started = System.nanoTime();
+//		long started = System.nanoTime();
 		List<OptionDto> r = gstr3bFilingRepository.periods();	
 
 		return r;

@@ -32,7 +32,6 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
-
 import java.io.BufferedWriter;
 import java.io.IOException;
 import java.io.OutputStreamWriter;
@@ -49,13 +48,7 @@ import java.util.function.Supplier;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 
-/**
- * GSTR-3B office revenue dashboard API (read-only + CSV export).
- *
- * <p>Errors are mapped by {@code gov.com.ai.webapp.exception.GlobalExceptionHandler} (400 validation, 401/429
- * from {@link ResponseStatusException}, 503/500 for database failures). The monthly batch endpoint lives with the
- * batch code; after a batch run it must call {@code OfficeRevenueDashboardService#evictDashboardCaches()}.
- */
+
 @Slf4j
 @Validated
 @RestController
@@ -63,11 +56,9 @@ import java.util.stream.StreamSupport;
 @RequestMapping("/gst/return-3b/office-revenue")
 public class OfficeRevenueController {
 
-	/** MMYYYY, month 01-12, year 2000-2099. */
 	private static final String PERIOD = "(0[1-9]|1[0-2])20\\d{2}";
 	private static final String PERIOD_MSG = "must be in MMYYYY format, e.g. 032025";
-
-	/** Must list the same values as OfficeRevenueDashboardService.GROWTH_STATUSES. Empty = no filter. */
+	
 	private static final String GROWTH = "(?i)(HIGH|MEDIUM|LOW|STABLE|DECLINING|NO_BASE)?";
 	private static final String GROWTH_MSG = "must be HIGH, MEDIUM, LOW, STABLE, DECLINING or NO_BASE";
 
@@ -76,33 +67,21 @@ public class OfficeRevenueController {
 	private static final int SUMMARY_PAGE = 0;
 	private static final int SUMMARY_SIZE = 25;
 	private static final int EXPORT_PAGE = 0;
-	private static final int EXPORT_SIZE = 100; // ignored by the export query, which streams every row
-	private static final int MAX_PAGE = 100_000; // same limit as the service
+	private static final int EXPORT_SIZE = 100; 
+	private static final int MAX_PAGE = 100_000; 
 	private static final int MAX_PAGE_SIZE = 100;
 	private static final int MAX_MONTHS = 36;
 	private static final long SLOW_MS = 2_000;
 	private static final int MAX_LOG_VALUE = 300;
-	private static final byte[] UTF8_BOM = { (byte) 0xEF, (byte) 0xBB, (byte) 0xBF };
-
-	/** Each export holds a DB connection and a request thread for its whole duration. */
-	private static final int MAX_CONCURRENT_EXPORTS = 4;
-
-	/**
-	 * Legacy rule: a token with NO roles is treated as Super Admin. This is fail-open; set to false as soon as
-	 * every token is known to carry a role.
-	 */
+	private static final byte[] UTF8_BOM = { (byte) 0xEF, (byte) 0xBB, (byte) 0xBF };	
+	private static final int MAX_CONCURRENT_EXPORTS = 4;	
 	private static final boolean LEGACY_NO_ROLE_IS_SUPER_ADMIN = true;
-
 	private static final CacheControl NO_STORE = CacheControl.noStore();
 	private static final CacheControl LOOKUP_CACHE = CacheControl.maxAge(Duration.ofMinutes(1)).cachePrivate();
-
 	private final Semaphore exportPermits = new Semaphore(MAX_CONCURRENT_EXPORTS);
-
 	private final OfficeRevenueDashboardService dashboard;
 	private final CommonUserRepo commonUserRepo;
-	private final JwtUtil jwtUtil;
-
-	// ------------------------------------------------------------------ reads
+	private final JwtUtil jwtUtil;	
 
 	@GetMapping("/summary")
 	public ResponseEntity<OfficeRevenueDashboardResponse> summary(
@@ -148,14 +127,7 @@ public class OfficeRevenueController {
 		List<OptionDto> body = timed("periods", "", dashboard::periods);
 		return ResponseEntity.ok().cacheControl(LOOKUP_CACHE).body(body);
 	}
-
-	/**
-	 * Offices the caller may pick in the dropdown. Super Admin: every office for the period. Others: the offices
-	 * under their assigned office ids (the period does not narrow those).
-	 *
-	 * <p>NOTE: this only filters the dropdown. /summary, /list, /trend and /export do not enforce the same scope,
-	 * see the review notes.
-	 */
+	
 	@GetMapping("/offices")
 	public ResponseEntity<List<OptionDto>> offices(@AuthenticationPrincipal Jwt jwt,
 			@RequestParam @Pattern(regexp = PERIOD, message = PERIOD_MSG) String retPeriod) {
@@ -214,21 +186,11 @@ public class OfficeRevenueController {
 		}
 
 		log.debug("Offices resolved period={} assignedIds={} offices={}", period, officeIds.size(), unique.size());
-
 		return ok(List.copyOf(unique.values()));
 	}
 
-	// ----------------------------------------------------------------- export
-
-	/**
-	 * Streams the CSV. The filter is validated BEFORE the stream starts: once streaming begins the 200 status is
-	 * already sent and an error could only produce a truncated file. Concurrent exports are capped (429 when
-	 * full). No {@code produces} restriction, so clients sending another Accept header still get the file
-	 * instead of a 406.
-	 *
-	 * <p>Long exports also need {@code spring.mvc.async.request-timeout} set high enough, otherwise the stream is
-	 * cut mid-file.
-	 */
+	//-------- export
+	
 	@GetMapping("/export")
 	public ResponseEntity<StreamingResponseBody> export(
 			@RequestParam @Pattern(regexp = PERIOD, message = PERIOD_MSG) String retPeriod,
@@ -286,7 +248,7 @@ public class OfficeRevenueController {
 		}
 	}
 
-	// ---------------------------------------------------------------- helpers
+	// ---------------- helpers
 
 	private static ResponseEntity<List<OptionDto>> ok(List<OptionDto> body) {
 		// per-user data: private cache only
@@ -302,7 +264,6 @@ public class OfficeRevenueController {
 			}
 			return LEGACY_NO_ROLE_IS_SUPER_ADMIN;
 		}
-
 		return roles.stream().filter(Objects::nonNull)
 				.map(r -> r.trim().toUpperCase(Locale.ROOT).replaceFirst("^ROLE_", "").replace('_', ' '))
 				.anyMatch("SUPER ADMIN"::equals);

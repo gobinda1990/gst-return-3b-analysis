@@ -28,8 +28,8 @@ public class GstGrowthService {
 
 	private static final Pattern PERIOD_PATTERN = Pattern.compile("(0[1-9]|1[0-2])\\d{4}");
 
-	private static final Set<String> ALLOWED_TRENDS = Set.of("STRONG_GROWTH", "GROWTH", "STABLE", "DECLINE",
-			"DECLINING", "STRONG_DECLINE", "SHARP_DECLINE");
+	private static final Set<String> ALLOWED_TRENDS = Set.of("STRONG_GROWTH", "GROWTH", "STABLE",
+			"DECLINING", "STRONG_DECLINE");
 
 	private static final Set<String> ALLOWED_RISK_LEVELS = Set.of("HIGH", "MEDIUM", "LOW");
 

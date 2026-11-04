@@ -60,25 +60,19 @@ public class CacheConfig {
 		register(manager, CACHE_GROWTH_TAXPAYERS, Duration.ofMinutes(15), 2_000);
 
 		// 3. Defaulter dashboard
-		register(manager, CACHE_DEFAULTER_SUMMARY, Duration.ofMinutes(5), 1_000);
-		register(manager, CACHE_DEFAULTER_PERIODS, Duration.ofMinutes(30), 10);
-		register(manager, CACHE_DEFAULTER_OFFICES, Duration.ofMinutes(15), 200);
-		register(manager, CACHE_DEFAULTER_HISTORY, Duration.ofMinutes(10), 5_000);
+		register(manager, CACHE_DEFAULTER_SUMMARY, Duration.ofMinutes(45), 1_000);
+		register(manager, CACHE_DEFAULTER_PERIODS, Duration.ofMinutes(45), 10);
+		register(manager, CACHE_DEFAULTER_OFFICES, Duration.ofMinutes(45), 200);
+		register(manager, CACHE_DEFAULTER_HISTORY, Duration.ofMinutes(45), 5_000);
 		register(manager, CACHE_DEFAULTER_CHARGE_OFFICES, Duration.ofMinutes(15), 200);
 		
 
 		// 4. Office revenue service
-		register(manager, CACHE_OFFICE_REVENUE_SUMMARY, Duration.ofMinutes(5), 2_000);
-		register(manager, CACHE_OFFICE_REVENUE_TREND, Duration.ofMinutes(5), 2_000);
-		register(manager, CACHE_OFFICE_REVENUE_PERIODS, Duration.ofMinutes(30), 10);
-		register(manager, CACHE_OFFICE_REVENUE_OFFICES, Duration.ofMinutes(15), 1_000);
-
-		// OPTIONAL hardening (disabled): makes an unregistered cache name fail fast instead of
-		// silently creating an unbounded, never-expiring cache. Enable ONLY after confirming that
-		// every @Cacheable/@CacheEvict/@CachePut name in the whole project is registered above,
-		// otherwise those calls fail with "Cannot find cache named ...".
-		// manager.setCacheNames(java.util.List.of());
-
+		register(manager, CACHE_OFFICE_REVENUE_SUMMARY, Duration.ofMinutes(45), 2_000);
+		register(manager, CACHE_OFFICE_REVENUE_TREND, Duration.ofMinutes(45), 2_000);
+		register(manager, CACHE_OFFICE_REVENUE_PERIODS, Duration.ofMinutes(45), 10);
+		register(manager, CACHE_OFFICE_REVENUE_OFFICES, Duration.ofMinutes(45), 1_000);
+		
 		return manager;
 	}
 
@@ -86,7 +80,7 @@ public class CacheConfig {
 		manager.registerCustomCache(name, Caffeine.newBuilder()
 				.expireAfterWrite(ttl)
 				.maximumSize(maxSize)
-				.recordStats() // enables hit/miss metrics via Spring Boot Actuator
+				.recordStats() 
 				.build());
 	}
 }
