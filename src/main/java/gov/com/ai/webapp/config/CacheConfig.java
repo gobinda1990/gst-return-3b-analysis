@@ -53,18 +53,18 @@ public class CacheConfig {
 		register(manager, CACHE_GST_ITC_ANALYTICS, Duration.ofHours(4), 1_000);
 
 		// 2. Growth service (separate instances avoid key collisions between caches)
-		register(manager, CACHE_GROWTH_SUMMARY, Duration.ofMinutes(5), 500);
-		register(manager, CACHE_GROWTH_TREND, Duration.ofMinutes(5), 500);
-		register(manager, CACHE_GROWTH_PERIODS, Duration.ofMinutes(30), 10);
-		register(manager, CACHE_GROWTH_OFFICES, Duration.ofMinutes(60), 200);
-		register(manager, CACHE_GROWTH_TAXPAYERS, Duration.ofMinutes(15), 2_000);
+		register(manager, CACHE_GROWTH_SUMMARY, Duration.ofMinutes(45), 500);
+		register(manager, CACHE_GROWTH_TREND, Duration.ofMinutes(45), 500);
+		register(manager, CACHE_GROWTH_PERIODS, Duration.ofMinutes(45), 10);
+		register(manager, CACHE_GROWTH_OFFICES, Duration.ofMinutes(45), 200);
+		register(manager, CACHE_GROWTH_TAXPAYERS, Duration.ofMinutes(45), 2_000);
 
 		// 3. Defaulter dashboard
 		register(manager, CACHE_DEFAULTER_SUMMARY, Duration.ofMinutes(45), 1_000);
 		register(manager, CACHE_DEFAULTER_PERIODS, Duration.ofMinutes(45), 10);
 		register(manager, CACHE_DEFAULTER_OFFICES, Duration.ofMinutes(45), 200);
 		register(manager, CACHE_DEFAULTER_HISTORY, Duration.ofMinutes(45), 5_000);
-		register(manager, CACHE_DEFAULTER_CHARGE_OFFICES, Duration.ofMinutes(15), 200);
+		register(manager, CACHE_DEFAULTER_CHARGE_OFFICES, Duration.ofMinutes(45), 200);
 		
 
 		// 4. Office revenue service
