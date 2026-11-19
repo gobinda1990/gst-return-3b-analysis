@@ -76,6 +76,18 @@ public class DashboardDTOs {
 	    private Double cashRatio;
 	    private Integer filingDelayDays;
 	    private String filingStatus;       // "FILED", "DELAYED", "PENDING"
+	    
+	    private BigDecimal itcUtilizationRatio ;
+	    /**
+	     * ITC_TO_TAX_RATIO = eligibleItc / totalOutputTax
+	     * High ratio (>= 5.0) = inverted duty indicator or ITC accumulation
+	     */
+	    private BigDecimal itcToTaxRatio ;
+	    /**
+	     * CASH_PAYMENT_RATIO = cashTaxPaid / totalOutputTax
+	     * Low ratio (< 0.01) combined with high ITC ratio = credit-driven discharge
+	     */
+	    private BigDecimal cashPaymentRatio;
 	}
 
 	@Data
